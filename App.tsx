@@ -40,9 +40,6 @@ function App() {
   const [unitFilter, setUnitFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [psychOnly, setPsychOnly] = useState(false);
-
-  const [auditLog, setAuditLog] = useState<string[]>([]);
-  const [showComplianceModal, setShowComplianceModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addGlobalLog = (action: string) => {

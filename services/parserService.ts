@@ -180,14 +180,9 @@ export const parseMeds = (raw: string): Medication[] => {
         // Fallback: Use Form/Strength markers to try to find the end of the drug name
         // e.g. "Abilify Oral Tablet 2 MG" -> Name: Abilify, Dose: Oral Tablet 2 MG (roughly)
         // or finding end of dose if instructions are missing explicit verbs
-        
-        // Matches common strength units or forms at the *end* of the potential drug/dose string
-        const doseEndRegex = /\s(\d+(\.\d+)?\s*(?:MG|MCG|ML|GM|G|%|UNIT|IU)|Tablet|Tab|Capsule|Cap|Soln|Solution|Susp|Suspension|Inj|Injection|Cream|Ointment|Patch)\b/i;
-        
         // Try to split on the last occurrence of a dose-like pattern if no verb found
         // This is tricky without a definitive split. 
         // We will default to keeping the whole string as the "Dose" and guessing the name is the first word.
-        const firstWord = cleanText.split(' ')[0];
         drugNameAndDose = cleanText; 
         frequency = "See Order"; // If we can't find a sig, label it.
     }
@@ -304,6 +299,6 @@ export const parseCarePlans = (raw: string): { mrn: string; item: CarePlanItem }
   return results;
 };
 
-export const parseGdr = (raw: string): { mrn: string; event: GdrEvent }[] => {
+export const parseGdr = (_raw: string): { mrn: string; event: GdrEvent }[] => {
     return []; 
 };

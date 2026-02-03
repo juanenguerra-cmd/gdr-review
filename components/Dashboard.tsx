@@ -1,7 +1,7 @@
 import React from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { ResidentData, ComplianceStatus } from '../types';
-import { ShieldCheck, AlertTriangle, AlertOctagon, Users, Pill, RefreshCw } from 'lucide-react';
+import { ShieldCheck, AlertOctagon, Users, Pill } from 'lucide-react';
 
 interface Props {
   residents: ResidentData[];

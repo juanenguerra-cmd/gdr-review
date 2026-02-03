@@ -1,6 +1,6 @@
 import React from 'react';
 import { ResidentData } from '../types';
-import { FileWarning, Printer, Download } from 'lucide-react';
+import { FileWarning, Printer } from 'lucide-react';
 
 interface Props {
   residents: ResidentData[];
