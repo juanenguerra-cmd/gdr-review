@@ -36,7 +36,9 @@ function App() {
   const [showParser, setShowParser] = useState(false);
   const [showReport, setShowReport] = useState(false);
 
-  const [showComplianceModal, setShowComplianceModal] = useState(false);
+
+  const [, setAuditLog] = useState<string[]>([]);
+  const [, setShowComplianceModal] = useState(false);
   const [filterText, setFilterText] = useState("");
   const [unitFilter, setUnitFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -45,7 +47,7 @@ function App() {
 
   const addGlobalLog = (action: string) => {
     const timestamp = new Date().toLocaleTimeString();
-    setAuditLog(prev => [`[${timestamp}] ${action}`, ...prev]);
+    setAuditLog((prev: string[]) => [`[${timestamp}] ${action}`, ...prev]);
   };
 
   const createAuditEntry = (message: string, type: AuditEntry['type'] = 'info'): AuditEntry => ({
