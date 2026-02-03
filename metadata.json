@@ -1,0 +1,5 @@
+{
+  "name": "GDR & Psychotropic Compliance Review",
+  "description": "A CMS & NYSDOH compliant tool for monitoring Psychotropic usage and Gradual Dose Reductions (GDR) in long-term care facilities.",
+  "requestFramePermissions": []
+}

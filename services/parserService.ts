@@ -1,0 +1,309 @@
+import { Resident, Medication, ConsultEvent, CarePlanItem, GdrEvent, BehaviorEvent } from '../types';
+
+// --- Helpers & Regex ---
+
+const REGEX_DATE_SLASH = /(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/;
+const REGEX_MRN_PARENS = /\(([A-Za-z0-9]+)\)/;
+const REGEX_NAME_MRN = /^(.+?)\s*\(([A-Za-z0-9]+)\)/;
+
+const normalizeText = (text: string): string => {
+  return (text || "").replace(/[\u00A0]/g, " ").replace(/\s+/g, " ").trim();
+};
+
+const parseDateString = (dateStr: string): string => {
+  if (!dateStr) return "";
+  const t = dateStr.trim();
+  const match = t.match(REGEX_DATE_SLASH);
+  
+  if (match) {
+    const p1 = parseInt(match[1], 10);
+    const p2 = parseInt(match[2], 10);
+    const p3 = parseInt(match[3], 10);
+
+    // Standardizing on MM/DD/YYYY input assumption for US Healthcare
+    const mm = p1;
+    const dd = p2;
+    let yy = p3;
+    
+    if (yy < 100) {
+      yy = yy < 50 ? 2000 + yy : 1900 + yy;
+    }
+
+    if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return "";
+
+    return `${yy}-${mm.toString().padStart(2, '0')}-${dd.toString().padStart(2, '0')}`;
+  }
+  return "";
+};
+
+const extractMrn = (line: string): string | null => {
+  const match = line.match(REGEX_MRN_PARENS);
+  return match ? match[1].toUpperCase() : null;
+};
+
+// --- Parsers ---
+
+export const parseCensus = (raw: string): Resident[] => {
+  const residents: Resident[] = [];
+  const lines = raw.split(/\r?\n/);
+  let currentUnit = "UNKNOWN";
+
+  for (const line of lines) {
+    const text = normalizeText(line);
+    if (!text || /\bEMPTY\b/i.test(text)) continue;
+
+    const unitMatch = text.match(/(?:Unit\s*[:\-]?\s*Unit\s*|Unit\s+)(\d+)/i);
+    if (unitMatch) {
+      currentUnit = `Unit ${unitMatch[1]}`;
+      continue;
+    }
+
+    const complexMatch = text.match(/^([0-9]{2,4}\s*[-–]?\s*[A-Z]?)\s+(.+?)\s*\(([A-Za-z0-9]+)\)/);
+    const nameMrnMatch = text.match(REGEX_NAME_MRN);
+
+    if (complexMatch) {
+      residents.push({
+        room: normalizeText(complexMatch[1]),
+        name: normalizeText(complexMatch[2]),
+        mrn: normalizeText(complexMatch[3]).toUpperCase(),
+        unit: currentUnit
+      });
+    } else if (nameMrnMatch) {
+      residents.push({
+        room: '',
+        name: normalizeText(nameMrnMatch[1]),
+        mrn: normalizeText(nameMrnMatch[2]).toUpperCase(),
+        unit: currentUnit
+      });
+    }
+  }
+  return residents;
+};
+
+const classifyMedication = (medName: string): Medication['class'] => {
+  const lowerName = medName.toLowerCase();
+  const classes: Record<string, RegExp> = {
+    'Antipsychotic': /olanzapine|quetiapine|risperidone|haldol|haloperidol|aripiprazole|ziprasidone|clozapine|lurasidone|brexpiprazole|cariprazine/,
+    'Antidepressant': /citalopram|sertraline|fluoxetine|paroxetine|escitalopram|venlafaxine|trazodone|mirtazapine|duloxetine|bupropion|amitriptyline/,
+    'Anxiolytic': /diazepam|clonazepam|alprazolam|lorazepam|buspirone|hydroxyzine|oxazepam/,
+    'Hypnotic': /zolpidem|temazepam|eszopiclone|melatonin|zaleplon|suvorexant/,
+    'Mood stabilizer': /divalproex|valproate|lamotrigine|carbamazepine|lithium/
+  };
+
+  for (const [cls, regex] of Object.entries(classes)) {
+    if (regex.test(lowerName)) return cls as Medication['class'];
+  }
+  return "Other";
+};
+
+export const parseMeds = (raw: string): Medication[] => {
+  const meds: Medication[] = [];
+  const lines = raw.split(/\r?\n/);
+
+  for (const line of lines) {
+    const text = normalizeText(line);
+    if (!text) continue;
+
+    // Expected format: "DrugName Form Strength (MRN) Instructions"
+    const match = text.match(/^(.+?)\s*\(([A-Za-z0-9]+)\)\s+(.+)$/);
+    if (!match) continue;
+
+    const mrn = match[2].toUpperCase();
+    const rawMedText = normalizeText(match[3]);
+
+    // 1. Extract Date first to clean up the string
+    let startDate: string | undefined;
+    let cleanText = rawMedText;
+    
+    const dateMatch = cleanText.match(REGEX_DATE_SLASH);
+    if (dateMatch) {
+        startDate = parseDateString(dateMatch[0]);
+        cleanText = cleanText.replace(dateMatch[0], "").trim();
+    }
+
+    // 2. Extract Indication
+    let indication = "Unknown";
+    const indicationMatch = cleanText.match(/\bfor\s+([a-zA-Z0-9\s/.,\-]+?)(?=\s*$|\s+(?:Start|Date|Give|Take|Apply|Inject|Inhale|Use|By|Orally|Topically))/i);
+    
+    if (indicationMatch) {
+        const rawIndication = indicationMatch[1].trim();
+        cleanText = cleanText.replace(indicationMatch[0], "").trim();
+        
+        // De-duplicate words
+        const words = rawIndication.split(/\s+/);
+        const uniqueWords: string[] = [];
+        const seen = new Set<string>();
+        for (const w of words) {
+            const lower = w.toLowerCase();
+            if (!seen.has(lower)) {
+                seen.add(lower);
+                uniqueWords.push(w);
+            }
+        }
+        indication = uniqueWords.join(' ');
+
+        try {
+            const escapedIndication = indication.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const duplicateRegex = new RegExp(`\\s+${escapedIndication}$`, 'i');
+            cleanText = cleanText.replace(duplicateRegex, '').trim();
+        } catch (e) {
+            // fallback
+        }
+
+    } else {
+        const words = cleanText.split(' ');
+        if (words.length > 2) {
+             const lastWord = words[words.length - 1];
+             if (lastWord.length > 3 && /depression|anxiety|psychosis|insomnia|schizophrenia|agitation|bipolar|pain/i.test(lastWord)) {
+                 indication = lastWord;
+                 cleanText = cleanText.substring(0, cleanText.lastIndexOf(lastWord)).trim();
+             }
+        }
+    }
+
+    // 3. Separate Name/Dose from Sig/Frequency
+    // Strategy: Look for the *start* of the instruction (sig).
+    // Common starts: "Give", "Take", "Apply", or "1 tablet", "2 puffs", "One capsule"
+    
+    // Pattern matches the instruction start
+    const sigStartRegex = /\b(?:Give|Take|Apply|Inject|Inhale|Infuse|Use|Instill|Place|Patch|Spray|Chew|Swallow|Dissolve)\b|\b(?:\d+|One|Two|Three|Four|Five|Half)\s+(?:Tablet|Tab|Cap|Capsule|Puff|Spray|Drop|Patch|App|Application|Inj|Injection)s?\b/i;
+    
+    let drugNameAndDose = cleanText;
+    let frequency = "Unknown";
+
+    const sigMatch = cleanText.match(sigStartRegex);
+
+    if (sigMatch && sigMatch.index !== undefined && sigMatch.index > 0) {
+        drugNameAndDose = cleanText.substring(0, sigMatch.index).trim();
+        frequency = cleanText.substring(sigMatch.index).trim();
+    } else {
+        // Fallback: Use Form/Strength markers to try to find the end of the drug name
+        // e.g. "Abilify Oral Tablet 2 MG" -> Name: Abilify, Dose: Oral Tablet 2 MG (roughly)
+        // or finding end of dose if instructions are missing explicit verbs
+        
+        // Matches common strength units or forms at the *end* of the potential drug/dose string
+        const doseEndRegex = /\s(\d+(\.\d+)?\s*(?:MG|MCG|ML|GM|G|%|UNIT|IU)|Tablet|Tab|Capsule|Cap|Soln|Solution|Susp|Suspension|Inj|Injection|Cream|Ointment|Patch)\b/i;
+        
+        // Try to split on the last occurrence of a dose-like pattern if no verb found
+        // This is tricky without a definitive split. 
+        // We will default to keeping the whole string as the "Dose" and guessing the name is the first word.
+        const firstWord = cleanText.split(' ')[0];
+        drugNameAndDose = cleanText; 
+        frequency = "See Order"; // If we can't find a sig, label it.
+    }
+
+    // 4. Refine Drug Name vs Dose String
+    // drugNameAndDose might be "Abilify Oral Tablet 2 MG"
+    // We want drugName="Abilify", Dose="Oral Tablet 2 MG" (or just full display)
+    
+    // Simple heuristic: Name is the first word, or words before common form/strength indicators
+    let drugName = drugNameAndDose.split(' ')[0];
+    
+    const formStrengthMatch = drugNameAndDose.match(/\b(?:Oral|Tablet|Tab|Capsule|Cap|Soln|Solution|Susp|Inj|MG|MCG|ML|%)\b/i);
+    if (formStrengthMatch && formStrengthMatch.index && formStrengthMatch.index > 0) {
+        drugName = drugNameAndDose.substring(0, formStrengthMatch.index).trim();
+    }
+
+    // Ensure drug name isn't empty if regex gets too aggressive
+    if(!drugName) drugName = drugNameAndDose.split(' ')[0];
+
+    // If frequency is still just "See Order", try to grab the tail if distinct
+    if (frequency === "See Order" && drugNameAndDose.length > drugName.length) {
+         // check if the tail looks like a sig? e.g. "BID", "Daily"
+         const tail = drugNameAndDose.substring(drugName.length).trim();
+         if (/\b(?:BID|TID|QID|Daily|QAM|QPM|PRN|Once)\b/i.test(tail)) {
+             frequency = tail;
+             drugNameAndDose = drugName; // reset dose display to just name? No, keep context.
+         }
+    }
+
+    meds.push({
+      mrn,
+      drug: drugName, 
+      display: drugNameAndDose, // This usually contains "Name + Strength + Form"
+      class: classifyMedication(drugName),
+      frequency: frequency, 
+      dose: drugNameAndDose, // Using the full name+strength string as dose/display for now
+      startDate,
+      indication
+    });
+  }
+  return meds;
+};
+
+export const parseConsults = (raw: string): { mrn: string; event: ConsultEvent }[] => {
+  const results: { mrn: string; event: ConsultEvent }[] = [];
+  const lines = raw.split(/\r?\n/);
+  let currentMrn = "";
+
+  for (const line of lines) {
+    const text = normalizeText(line);
+    if (!text) continue;
+
+    const mrn = extractMrn(text);
+    if (mrn) currentMrn = mrn;
+
+    const dateStr = parseDateString(text);
+    if (dateStr && currentMrn) {
+      const status = /complete/i.test(text) ? "Complete" : (/pending/i.test(text) ? "Pending" : "Unknown");
+      results.push({
+        mrn: currentMrn,
+        event: {
+          date: dateStr,
+          status,
+          snippet: text.substring(0, 150)
+        }
+      });
+    }
+  }
+  return results;
+};
+
+export const parseBehaviors = (raw: string): { mrn: string; event: BehaviorEvent }[] => {
+    const results: { mrn: string; event: BehaviorEvent }[] = [];
+    const lines = raw.split(/\r?\n/);
+    let currentMrn = "";
+
+    for(const line of lines) {
+        const text = normalizeText(line);
+        if(!text) continue;
+
+        const mrn = extractMrn(text);
+        if(mrn) currentMrn = mrn;
+
+        const dateStr = parseDateString(text);
+        if(dateStr && currentMrn) {
+            results.push({
+                mrn: currentMrn,
+                event: {
+                    date: dateStr,
+                    snippet: text
+                }
+            })
+        }
+    }
+    return results;
+};
+
+export const parseCarePlans = (raw: string): { mrn: string; item: CarePlanItem }[] => {
+  const results: { mrn: string; item: CarePlanItem }[] = [];
+  const lines = raw.split(/\r?\n/);
+
+  for (const line of lines) {
+    const text = normalizeText(line);
+    const match = text.match(/^(.+?)\s*\(([A-Za-z0-9]+)\)\s+(.+)$/);
+    
+    if (match) {
+      const mrn = match[2].toUpperCase();
+      const planText = match[3];
+      if (/psychotropic|behavior|antipsychotic|mood/i.test(planText)) {
+        results.push({ mrn, item: { text: planText } });
+      }
+    }
+  }
+  return results;
+};
+
+export const parseGdr = (raw: string): { mrn: string; event: GdrEvent }[] => {
+    return []; 
+};
