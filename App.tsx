@@ -36,6 +36,7 @@ function App() {
   const [showParser, setShowParser] = useState(false);
   const [showReport, setShowReport] = useState(false);
 
+  const [showComplianceModal, setShowComplianceModal] = useState(false);
   const [filterText, setFilterText] = useState("");
   const [unitFilter, setUnitFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
