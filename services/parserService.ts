@@ -497,13 +497,10 @@ export const parseEpisodicBehaviors = (raw: string): { mrn: string; event: Episo
     ]);
 
     const situation = cleanSection(situationRaw)
-      .replace(/What behavior was observed\??/i, "")
       .replace(/What time did the behavior start\??[^.]*\.?/i, "")
       .replace(/Location where behavior was observed\??[^.]*\.?/i, "")
       .trim();
-    const immediate = cleanSection(immediateRaw)
-      .replace(/Immediate action\/?s? were taken to ensure safety:?/i, "")
-      .trim();
+    const immediate = cleanSection(immediateRaw).trim();
     const intervention = cleanSection(interventionRaw)
       .replace(/The following non-pharmacological interventions were attempted:?/i, "")
       .trim();
@@ -511,14 +508,23 @@ export const parseEpisodicBehaviors = (raw: string): { mrn: string; event: Episo
       .replace(/Resident response to non-pharmacological intervention\/?s?:?/i, "")
       .trim();
 
+    const interventionLines: string[] = [];
+    if (intervention) {
+      interventionLines.push(
+        `The following non-pharmacological interventions were attempted:${intervention ? `\n${intervention}` : ""}`
+      );
+    }
+    if (response) {
+      interventionLines.push(`Resident response to non-pharmacological intervention/s: ${response}`);
+    }
+
     const parts = [
-      situation ? `Situation: ${situation}` : "",
-      immediate ? `Immediate action: ${immediate}` : "",
-      intervention ? `Intervention: ${intervention}` : "",
-      response ? `Response: ${response}` : ""
+      situation ? `Situation : ${situation}` : "",
+      immediate ? `Immediate Action : ${immediate}` : "",
+      interventionLines.length ? `Intervention : ${interventionLines.join("\n")}` : ""
     ].filter(Boolean);
 
-    const summary = parts.length > 0 ? parts.join(" ") : normalized;
+    const summary = parts.length > 0 ? parts.join("\n\n") : normalized;
     return summary.length > 260 ? `${summary.slice(0, 257)}...` : summary;
   };
 
