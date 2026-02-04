@@ -75,6 +75,17 @@ export const SettingsModal: React.FC<Props> = ({
                 <option value="WARNING">Warning</option>
                 <option value="CRITICAL">Critical</option>
               </select>
+              <label className="block text-xs font-bold text-slate-500 uppercase">OneDrive backup folder URL</label>
+              <input
+                type="url"
+                value={settings.oneDriveFolderUrl}
+                onChange={(e) => onSettingsChange({ oneDriveFolderUrl: e.target.value })}
+                className="w-full p-2 border border-slate-300 rounded-lg text-sm"
+                placeholder="https://..."
+              />
+              <p className="text-[11px] text-slate-400">
+                Paste the OneDrive folder link where backups should be uploaded/downloaded.
+              </p>
             </div>
             <div className="space-y-3">
               <label className="block text-xs font-bold text-slate-500 uppercase">Indication mapping table</label>

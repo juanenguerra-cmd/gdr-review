@@ -123,6 +123,7 @@ export interface AppSettings {
   indicationMap: Record<MedicationClass, string[]>;
   indicationMismatchSeverity: 'WARNING' | 'CRITICAL';
   customMedicationMap: Record<string, MedicationClass>;
+  oneDriveFolderUrl: string;
 }
 
 export interface ResidentData extends Resident {
