@@ -81,12 +81,12 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
   if (!resident) return null;
 
   const medClasses: MedicationClass[] = [
-    'Antipsychotic',
-    'Antidepressant',
-    'Anxiolytic',
-    'Hypnotic/Sedative',
-    'Mood Stabilizer',
-    'Cognitive Enhancer',
+    'ADHD/ANTI-NARCOLEPSY/ANTI-OBESITY/ANOREXIANTS',
+    'ANTIANXIETY AGENTS',
+    'ANTIDEPRESSANTS',
+    'ANTIPSYCHOTICS/ANTIMANIC AGENTS',
+    'HYPNOTICS/SEDATIVES/SLEEP DISORDER AGENTS',
+    'PSYCHOTHERAPEUTIC AND NEUROLOGICAL AGENTS - MISC.',
     'Other'
   ];
 
@@ -141,7 +141,7 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
   };
 
   const medicationWarnings = resident.compliance.issues.filter(issue =>
-    /indication|prn|antipsychotic \(/i.test(issue)
+    /indication|prn|antipsychotic|antimanic/i.test(issue)
   );
 
   const generalComplianceAlerts = resident.compliance.issues.filter(issue =>
