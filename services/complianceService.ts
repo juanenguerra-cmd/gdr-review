@@ -8,13 +8,64 @@ const isWithinDays = (dateStr: string, now: Date, days: number): boolean => {
 };
 
 const normalizeText = (text: string): string => (text || "").trim().toLowerCase();
+const STOP_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'for',
+  'of',
+  'or',
+  'the',
+  'to',
+  'with',
+  'per',
+  'some',
+  'agent',
+  'agents',
+  'short',
+  'term',
+  'related',
+  'dependent',
+  'other',
+  'cns',
+  'condition',
+  'conditions',
+  'disorder',
+  'disorders'
+]);
+
+const tokenize = (text: string): string[] => {
+  return normalizeText(text)
+    .split(/[^a-z0-9]+/i)
+    .map(token => token.trim())
+    .filter(token => token.length > 1 && !STOP_WORDS.has(token));
+};
+
+const hasFuzzyTokenMatch = (indication: string, allowedEntry: string): boolean => {
+  const indicationTokens = tokenize(indication);
+  const allowedTokens = tokenize(allowedEntry);
+  if (indicationTokens.length === 0 || allowedTokens.length === 0) return false;
+
+  const overlap = allowedTokens.filter(token => indicationTokens.includes(token)).length;
+  const minTokenCount = Math.min(indicationTokens.length, allowedTokens.length);
+  if (minTokenCount === 1) return overlap === 1;
+  return overlap / minTokenCount >= 0.6;
+};
 
 const getEffectiveClass = (med: Medication): MedicationClass => med.classOverride || med.class;
 
 const mapIndicationMatch = (indication: string, allowed: string[]): boolean => {
   const normalized = normalizeText(indication);
   if (!normalized || allowed.length === 0) return false;
-  return allowed.some(entry => normalizeText(entry).includes(normalized));
+  return allowed.some(entry => {
+    const normalizedEntry = normalizeText(entry);
+    if (!normalizedEntry) return false;
+    return (
+      normalizedEntry.includes(normalized) ||
+      normalized.includes(normalizedEntry) ||
+      hasFuzzyTokenMatch(normalized, normalizedEntry)
+    );
+  });
 };
 
 const needsReview = (indication: string): boolean => /unknown|review|uncertain|tbd/i.test(indication);
