@@ -441,6 +441,100 @@ export const parseEpisodicBehaviors = (raw: string): { mrn: string; event: Episo
   const results: { mrn: string; event: EpisodicBehaviorEvent }[] = [];
   const lines = raw.split(/\r?\n/);
   let currentMrn = "";
+  let currentBlock: { mrn: string; lines: string[] } | null = null;
+
+  const cleanSection = (value: string): string => normalizeText(value).replace(/^[:\-]\s*/, "");
+
+  const extractSection = (noteText: string, startLabel: RegExp, endLabels: RegExp[]): string => {
+    const startMatch = noteText.match(startLabel);
+    if (!startMatch || startMatch.index === undefined) return "";
+    const startIndex = startMatch.index + startMatch[0].length;
+    const rest = noteText.slice(startIndex);
+    const endRegex = new RegExp(endLabels.map(label => label.source).join("|"), "i");
+    const endIndex = rest.search(endRegex);
+    return cleanSection(endIndex === -1 ? rest : rest.slice(0, endIndex));
+  };
+
+  const buildSnippet = (noteText: string): string => {
+    const normalized = normalizeText(noteText);
+    const situationRaw = extractSection(normalized, /Situation\s*:?/i, [
+      /Immediate Action/i,
+      /Physical Evaluation/i,
+      /Intervention/i,
+      /Notification/i,
+      /Comments/i,
+      /Author/i
+    ]);
+    const immediateRaw = extractSection(normalized, /Immediate Action\s*:?/i, [
+      /Physical Evaluation/i,
+      /Intervention/i,
+      /Notification/i,
+      /Comments/i,
+      /Author/i
+    ]);
+    const interventionRaw = extractSection(normalized, /Intervention\s*:?/i, [
+      /Notification/i,
+      /Comments/i,
+      /Author/i
+    ]);
+    const responseRaw = extractSection(normalized, /Resident response to non-pharmacological intervention\/?s?\s*:?/i, [
+      /Was any medication/i,
+      /Notification/i,
+      /Comments/i,
+      /Author/i
+    ]);
+
+    const situation = cleanSection(situationRaw)
+      .replace(/What behavior was observed\??/i, "")
+      .replace(/What time did the behavior start\??[^.]*\.?/i, "")
+      .replace(/Location where behavior was observed\??[^.]*\.?/i, "")
+      .trim();
+    const immediate = cleanSection(immediateRaw)
+      .replace(/Immediate action\/?s? were taken to ensure safety:?/i, "")
+      .trim();
+    const intervention = cleanSection(interventionRaw)
+      .replace(/The following non-pharmacological interventions were attempted:?/i, "")
+      .trim();
+    const response = cleanSection(responseRaw)
+      .replace(/Resident response to non-pharmacological intervention\/?s?:?/i, "")
+      .trim();
+
+    const parts = [
+      situation ? `Situation: ${situation}` : "",
+      immediate ? `Immediate action: ${immediate}` : "",
+      intervention ? `Intervention: ${intervention}` : "",
+      response ? `Response: ${response}` : ""
+    ].filter(Boolean);
+
+    const summary = parts.length > 0 ? parts.join(" ") : normalized;
+    return summary.length > 260 ? `${summary.slice(0, 257)}...` : summary;
+  };
+
+  const extractEpisodicDate = (noteText: string): string => {
+    const effectiveMatch = noteText.match(/Effective Date:\s*([0-9\/-]+)/i);
+    if (effectiveMatch) {
+      const parsed = parseDateString(effectiveMatch[1]);
+      if (parsed) return parsed;
+    }
+    return parseDateString(noteText);
+  };
+
+  const finalizeBlock = () => {
+    if (!currentBlock) return;
+    const mrn = currentBlock.mrn;
+    const noteText = currentBlock.lines.join(" ");
+    const dateStr = extractEpisodicDate(noteText);
+    if (mrn && dateStr) {
+      results.push({
+        mrn,
+        event: {
+          date: dateStr,
+          snippet: buildSnippet(noteText)
+        }
+      });
+    }
+    currentBlock = null;
+  };
 
   for (const line of lines) {
     const text = normalizeText(line);
@@ -449,17 +543,17 @@ export const parseEpisodicBehaviors = (raw: string): { mrn: string; event: Episo
     const mrn = extractMrn(text);
     if (mrn) currentMrn = mrn;
 
-    const dateStr = parseDateString(text);
-    if (dateStr && currentMrn) {
-      results.push({
-        mrn: currentMrn,
-        event: {
-          date: dateStr,
-          snippet: text.substring(0, 200)
-        }
-      });
+    if (/Episodic Behavior Note/i.test(text) || (/Situation\s*:?/i.test(text) && !currentBlock)) {
+      if (currentBlock) finalizeBlock();
+      currentBlock = { mrn: currentMrn, lines: [text] };
+      continue;
+    }
+
+    if (currentBlock) {
+      currentBlock.lines.push(text);
     }
   }
 
+  finalizeBlock();
   return results;
 };
