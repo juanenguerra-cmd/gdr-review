@@ -26,6 +26,8 @@ export const ParserModal: React.FC<Props> = ({ isOpen, onClose, onParse }) => {
       case ParseType.MEDS: return "Paste Active Medication Orders (Name, MRN, Drug)...";
       case ParseType.CAREPLAN: return "Paste Care Plan Item Listing...";
       case ParseType.BEHAVIORS: return "Paste Behavior Logs (Name, MRN, Date)...";
+      case ParseType.PSYCH_MD_ORDERS: return "Paste MD Orders for Psych Consult/Eval...";
+      case ParseType.EPISODIC_BEHAVIORS: return "Paste Episodic Behavior Notes (Name, MRN, Date)...";
       default: return "Paste report text...";
     }
   };
@@ -52,6 +54,8 @@ export const ParserModal: React.FC<Props> = ({ isOpen, onClose, onParse }) => {
                 <option value={ParseType.CONSULTS}>Psych Consult History</option>
                 <option value={ParseType.CAREPLAN}>Care Plan Items</option>
                 <option value={ParseType.BEHAVIORS}>Behavior Logs</option>
+                <option value={ParseType.PSYCH_MD_ORDERS}>MD Orders (Psych Consult/Eval)</option>
+                <option value={ParseType.EPISODIC_BEHAVIORS}>Episodic Behaviors</option>
                 <option value={ParseType.GDR}>Pharmacy GDR Report</option>
                 </select>
             </div>

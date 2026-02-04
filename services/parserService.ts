@@ -1,4 +1,4 @@
-import { Resident, Medication, ConsultEvent, CarePlanItem, GdrEvent, BehaviorEvent } from '../types';
+import { Resident, Medication, ConsultEvent, CarePlanItem, GdrEvent, BehaviorEvent, MedicationClass, PsychMdOrder, EpisodicBehaviorEvent } from '../types';
 
 // --- Helpers & Regex ---
 
@@ -8,6 +8,67 @@ const REGEX_NAME_MRN = /^(.+?)\s*\(([A-Za-z0-9]+)\)/;
 
 const normalizeText = (text: string): string => {
   return (text || "").replace(/[\u00A0]/g, " ").replace(/\s+/g, " ").trim();
+};
+
+export const normalizeDrugName = (text: string): string => {
+  const withoutParens = (text || '').replace(/\([^)]*\)/g, ' ');
+  return withoutParens
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\b(mg|mcg|g|ml|unit|units|tablet|tab|capsule|cap|solution|suspension|susp|inj|injection|iv|im|po|oral|sl|subq|daily|bid|tid|qid|qhs|qam|qpm|prn|patch|spray|drop|drops|puff|puffs|chew|dissolve|take|give|apply|inhale|instill|place)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+};
+
+const PSYCH_MAP: Record<string, MedicationClass> = {
+  'haloperidol': 'Antipsychotic',
+  'haldol': 'Antipsychotic',
+  'risperidone': 'Antipsychotic',
+  'quetiapine': 'Antipsychotic',
+  'olanzapine': 'Antipsychotic',
+  'aripiprazole': 'Antipsychotic',
+  'ziprasidone': 'Antipsychotic',
+  'clozapine': 'Antipsychotic',
+  'lurasidone': 'Antipsychotic',
+  'brexpiprazole': 'Antipsychotic',
+  'cariprazine': 'Antipsychotic',
+  'paliperidone': 'Antipsychotic',
+  'chlorpromazine': 'Antipsychotic',
+  'fluphenazine': 'Antipsychotic',
+  'citalopram': 'Antidepressant',
+  'sertraline': 'Antidepressant',
+  'fluoxetine': 'Antidepressant',
+  'paroxetine': 'Antidepressant',
+  'escitalopram': 'Antidepressant',
+  'venlafaxine': 'Antidepressant',
+  'trazodone': 'Antidepressant',
+  'mirtazapine': 'Antidepressant',
+  'duloxetine': 'Antidepressant',
+  'bupropion': 'Antidepressant',
+  'amitriptyline': 'Antidepressant',
+  'nortriptyline': 'Antidepressant',
+  'diazepam': 'Anxiolytic',
+  'clonazepam': 'Anxiolytic',
+  'alprazolam': 'Anxiolytic',
+  'lorazepam': 'Anxiolytic',
+  'buspirone': 'Anxiolytic',
+  'hydroxyzine': 'Anxiolytic',
+  'oxazepam': 'Anxiolytic',
+  'temazepam': 'Hypnotic/Sedative',
+  'zolpidem': 'Hypnotic/Sedative',
+  'eszopiclone': 'Hypnotic/Sedative',
+  'melatonin': 'Hypnotic/Sedative',
+  'zaleplon': 'Hypnotic/Sedative',
+  'suvorexant': 'Hypnotic/Sedative',
+  'divalproex': 'Mood Stabilizer',
+  'valproate': 'Mood Stabilizer',
+  'lamotrigine': 'Mood Stabilizer',
+  'carbamazepine': 'Mood Stabilizer',
+  'lithium': 'Mood Stabilizer',
+  'donepezil': 'Cognitive Enhancer',
+  'memantine': 'Cognitive Enhancer',
+  'rivastigmine': 'Cognitive Enhancer',
+  'galantamine': 'Cognitive Enhancer'
 };
 
 const parseDateString = (dateStr: string): string => {
@@ -80,23 +141,21 @@ export const parseCensus = (raw: string): Resident[] => {
   return residents;
 };
 
-const classifyMedication = (medName: string): Medication['class'] => {
-  const lowerName = medName.toLowerCase();
-  const classes: Record<string, RegExp> = {
-    'Antipsychotic': /olanzapine|quetiapine|risperidone|haldol|haloperidol|aripiprazole|ziprasidone|clozapine|lurasidone|brexpiprazole|cariprazine/,
-    'Antidepressant': /citalopram|sertraline|fluoxetine|paroxetine|escitalopram|venlafaxine|trazodone|mirtazapine|duloxetine|bupropion|amitriptyline/,
-    'Anxiolytic': /diazepam|clonazepam|alprazolam|lorazepam|buspirone|hydroxyzine|oxazepam/,
-    'Hypnotic': /zolpidem|temazepam|eszopiclone|melatonin|zaleplon|suvorexant/,
-    'Mood stabilizer': /divalproex|valproate|lamotrigine|carbamazepine|lithium/
+const classifyMedication = (medName: string, customMap?: Record<string, MedicationClass>): MedicationClass => {
+  const nameNorm = normalizeDrugName(medName);
+  const combinedMap: Record<string, MedicationClass> = {
+    ...PSYCH_MAP,
+    ...(customMap || {})
   };
+  if (combinedMap[nameNorm]) return combinedMap[nameNorm];
 
-  for (const [cls, regex] of Object.entries(classes)) {
-    if (regex.test(lowerName)) return cls as Medication['class'];
-  }
+  const entry = Object.entries(combinedMap).find(([key]) => nameNorm.includes(key));
+  if (entry) return entry[1];
+
   return "Other";
 };
 
-export const parseMeds = (raw: string): Medication[] => {
+export const parseMeds = (raw: string, customMap?: Record<string, MedicationClass>): Medication[] => {
   const meds: Medication[] = [];
   const lines = raw.split(/\r?\n/);
 
@@ -212,11 +271,17 @@ export const parseMeds = (raw: string): Medication[] => {
          }
     }
 
+    const nameRaw = drugNameAndDose;
+    const nameNorm = normalizeDrugName(nameRaw);
+
     meds.push({
       mrn,
       drug: drugName, 
       display: drugNameAndDose, // This usually contains "Name + Strength + Form"
-      class: classifyMedication(drugName),
+      nameRaw,
+      nameNorm,
+      class: classifyMedication(nameRaw, customMap),
+      classOverride: undefined,
       frequency: frequency, 
       dose: drugNameAndDose, // Using the full name+strength string as dose/display for now
       startDate,
@@ -280,6 +345,8 @@ export const parseBehaviors = (raw: string): { mrn: string; event: BehaviorEvent
     return results;
 };
 
+const CAREPLAN_PSYCH_REGEX = /psychotropic|antipsychotic|behavior management|behavioral|agitation|hallucination|anxiety|insomnia|delusion|mood|depression|bipolar|schiz|psychosis/i;
+
 export const parseCarePlans = (raw: string): { mrn: string; item: CarePlanItem }[] => {
   const results: { mrn: string; item: CarePlanItem }[] = [];
   const lines = raw.split(/\r?\n/);
@@ -291,9 +358,7 @@ export const parseCarePlans = (raw: string): { mrn: string; item: CarePlanItem }
     if (match) {
       const mrn = match[2].toUpperCase();
       const planText = match[3];
-      if (/psychotropic|behavior|antipsychotic|mood/i.test(planText)) {
-        results.push({ mrn, item: { text: planText } });
-      }
+      results.push({ mrn, item: { text: planText, psychRelated: CAREPLAN_PSYCH_REGEX.test(planText) } });
     }
   }
   return results;
@@ -301,4 +366,75 @@ export const parseCarePlans = (raw: string): { mrn: string; item: CarePlanItem }
 
 export const parseGdr = (_raw: string): { mrn: string; event: GdrEvent }[] => {
     return []; 
+};
+
+const PSYCH_ORDER_REGEX = /\b(psychiatry|psychiatric|psych)\b.*\b(consult|eval|evaluation)\b|\b(consult|eval|evaluation)\b.*\b(psychiatry|psychiatric|psych)\b/i;
+
+export const parsePsychMdOrders = (
+  raw: string,
+  residents: Resident[]
+): { mrn: string; event: PsychMdOrder }[] => {
+  const results: { mrn: string; event: PsychMdOrder }[] = [];
+  const lines = raw.split(/\r?\n/);
+
+  const normalizedResidents = residents.map(r => ({
+    mrn: r.mrn.toUpperCase(),
+    name: normalizeText(r.name).toLowerCase()
+  }));
+
+  for (const line of lines) {
+    const text = normalizeText(line);
+    if (!text || !PSYCH_ORDER_REGEX.test(text)) continue;
+
+    const mrnMatch = extractMrn(text);
+    let matchedMrn = mrnMatch || "";
+
+    if (!matchedMrn) {
+      const lowerText = text.toLowerCase();
+      const foundResident = normalizedResidents.find(r => r.name && lowerText.includes(r.name));
+      if (foundResident) matchedMrn = foundResident.mrn;
+    }
+
+    if (!matchedMrn) continue;
+
+    const dateStr = parseDateString(text) || new Date().toISOString().slice(0, 10);
+    const orderText = text.substring(0, 200);
+    results.push({
+      mrn: matchedMrn,
+      event: {
+        date: dateStr,
+        orderText,
+        status: /complete|completed/i.test(text) ? "Completed" : "Ordered"
+      }
+    });
+  }
+
+  return results;
+};
+
+export const parseEpisodicBehaviors = (raw: string): { mrn: string; event: EpisodicBehaviorEvent }[] => {
+  const results: { mrn: string; event: EpisodicBehaviorEvent }[] = [];
+  const lines = raw.split(/\r?\n/);
+  let currentMrn = "";
+
+  for (const line of lines) {
+    const text = normalizeText(line);
+    if (!text) continue;
+
+    const mrn = extractMrn(text);
+    if (mrn) currentMrn = mrn;
+
+    const dateStr = parseDateString(text);
+    if (dateStr && currentMrn) {
+      results.push({
+        mrn: currentMrn,
+        event: {
+          date: dateStr,
+          snippet: text.substring(0, 200)
+        }
+      });
+    }
+  }
+
+  return results;
 };

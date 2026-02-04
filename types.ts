@@ -11,7 +11,9 @@ export enum ParseType {
   CONSULTS = 'consults',
   BEHAVIORS = 'behaviors',
   CAREPLAN = 'careplan',
-  GDR = 'gdr'
+  GDR = 'gdr',
+  PSYCH_MD_ORDERS = 'psych_md_orders',
+  EPISODIC_BEHAVIORS = 'episodic_behaviors'
 }
 
 export interface AuditEntry {
@@ -33,11 +35,23 @@ export interface Resident {
   unit: string;
 }
 
+export type MedicationClass =
+  | 'Antipsychotic'
+  | 'Antidepressant'
+  | 'Anxiolytic'
+  | 'Hypnotic/Sedative'
+  | 'Mood Stabilizer'
+  | 'Cognitive Enhancer'
+  | 'Other';
+
 export interface Medication {
   mrn: string;
   drug: string;
   display: string;
-  class: 'Antipsychotic' | 'Antidepressant' | 'Anxiolytic' | 'Hypnotic' | 'Mood stabilizer' | 'Other';
+  nameRaw: string;
+  nameNorm: string;
+  class: MedicationClass;
+  classOverride?: MedicationClass;
   frequency: string;
   dose: string;
   startDate?: string;
@@ -55,6 +69,18 @@ export interface BehaviorEvent {
   snippet: string;
 }
 
+export interface PsychMdOrder {
+  date: string;
+  orderText: string;
+  status: string;
+}
+
+export interface EpisodicBehaviorEvent {
+  date: string;
+  snippet: string;
+  category?: string;
+}
+
 export interface GdrEvent {
   date: string;
   status: string;
@@ -66,11 +92,37 @@ export interface GdrEvent {
 
 export interface CarePlanItem {
   text: string;
+  psychRelated?: boolean;
 }
 
 export interface Diagnosis {
     code: string;
     description: string;
+}
+
+export type ManualGdrStatus = 'NOT_SET' | 'DONE' | 'CONTRAINDICATED';
+
+export interface ManualGdrData {
+  status: ManualGdrStatus;
+  contraindications: {
+    symptomsReturned: boolean;
+    additionalGdrLikelyToImpair: boolean;
+    riskToSelfOrOthers: boolean;
+    other: boolean;
+    otherText?: string;
+  };
+  note?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface AppSettings {
+  consultRecencyDays: number;
+  behaviorThreshold: number;
+  behaviorWindowDays: number;
+  indicationMap: Record<MedicationClass, string[]>;
+  indicationMismatchSeverity: 'WARNING' | 'CRITICAL';
+  customMedicationMap: Record<string, MedicationClass>;
 }
 
 export interface ResidentData extends Resident {
@@ -80,6 +132,9 @@ export interface ResidentData extends Resident {
   gdr: GdrEvent[];
   carePlan: CarePlanItem[];
   diagnoses: Diagnosis[];
+  psychMdOrders: PsychMdOrder[];
+  episodicBehaviors: EpisodicBehaviorEvent[];
+  manualGdr: ManualGdrData;
   logs: AuditEntry[];
   compliance: {
     status: ComplianceStatus;
@@ -89,6 +144,11 @@ export interface ResidentData extends Resident {
     gdrOverdue: boolean;
     missingCarePlan: boolean;
     missingConsent: boolean; // NYSDOH specific
+    behaviorNotesCount?: number;
+    carePlanPsychPresent?: boolean;
+    indicationStatus?: 'OK' | 'MISSING' | 'MISMATCH' | 'NEEDS_REVIEW';
+    consultStatus?: 'CONSULT' | 'ORDER' | 'MISSING';
+    manualGdrStatus?: ManualGdrStatus;
   };
 }
 
