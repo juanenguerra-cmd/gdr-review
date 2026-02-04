@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning } from 'lucide-react';
+import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings } from 'lucide-react';
 import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData } from './types';
 import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors } from './services/parserService';
 import { evaluateResidentCompliance } from './services/complianceService';
@@ -10,6 +10,7 @@ import { ResidentList } from './components/ResidentList';
 import { ResidentProfileModal } from './components/ResidentProfileModal';
 import { Dashboard } from './components/Dashboard';
 import { DeficiencyReport } from './components/DeficiencyReport';
+import { SettingsModal } from './components/SettingsModal';
 
 const PrintStyles = () => (
   <style>{`
@@ -97,6 +98,7 @@ function App() {
   const [isLocked, setIsLocked] = useState(false);
   const [showParser, setShowParser] = useState(false);
   const [showReport, setShowReport] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [indicationMapText, setIndicationMapText] = useState(() => formatIndicationMap(DEFAULT_SETTINGS));
   const [customMedMapText, setCustomMedMapText] = useState(() => formatCustomMedMap(DEFAULT_SETTINGS));
@@ -438,6 +440,20 @@ function App() {
       <input type="file" ref={fileInputRef} onChange={handleImportFile} accept=".json" className="hidden" />
 
       {showParser && <ParserModal isOpen={showParser} onClose={() => setShowParser(false)} onParse={handleParse} />}
+      {showSettingsModal && (
+        <SettingsModal
+          isOpen={showSettingsModal}
+          onClose={() => setShowSettingsModal(false)}
+          settings={settings}
+          indicationMapText={indicationMapText}
+          customMedMapText={customMedMapText}
+          onSettingsChange={handleSettingsChange}
+          onIndicationMapTextChange={setIndicationMapText}
+          onCustomMedMapTextChange={setCustomMedMapText}
+          onIndicationMapBlur={() => handleSettingsChange({ indicationMap: parseIndicationMap(indicationMapText, settings) })}
+          onCustomMedMapBlur={() => handleSettingsChange({ customMedicationMap: parseCustomMedMap(customMedMapText, settings) })}
+        />
+      )}
       {showReport && <DeficiencyReport residents={filteredNonCompliantResidents} month={selectedMonth} onClose={() => setShowReport(false)} />}
       {selectedResidentData && (
           <ResidentProfileModal 
@@ -464,6 +480,7 @@ function App() {
             <button onClick={handleExport} className="p-2 hover:bg-white/20 rounded-full" title="Export Backup"><Download className="w-5 h-5" /></button>
             <button onClick={handleImportClick} className="p-2 hover:bg-white/20 rounded-full" title="Import Backup"><FileJson className="w-5 h-5" /></button>
             <div className="h-6 w-px bg-white/20 mx-1"></div>
+            <button onClick={() => setShowSettingsModal(true)} className="p-2 hover:bg-white/20 rounded-full" title="Settings"><Settings className="w-5 h-5" /></button>
             <button onClick={() => setShowComplianceModal(true)} className="p-2 hover:bg-white/20 rounded-full" title="Regulatory Info"><HelpCircle className="w-5 h-5" /></button>
             <button onClick={() => setIsLocked(true)} className="p-2 hover:bg-white/20 rounded-full text-yellow-300" title="Lock Screen"><Lock className="w-5 h-5" /></button>
           </div>
@@ -514,74 +531,6 @@ function App() {
                       </button>
                   </div>
               </div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 no-print">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-lg font-bold text-slate-700">Settings</h2>
-                <p className="text-xs text-slate-500">Facility-friendly thresholds and mappings.</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <div className="space-y-3">
-                <label className="block text-xs font-bold text-slate-500 uppercase">Psych consult window (days)</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={settings.consultRecencyDays}
-                  onChange={(e) => handleSettingsChange({ consultRecencyDays: Number(e.target.value) || 0 })}
-                  className="w-full p-2 border border-slate-300 rounded-lg text-sm"
-                />
-                <label className="block text-xs font-bold text-slate-500 uppercase">Behavior threshold (notes)</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={settings.behaviorThreshold}
-                  onChange={(e) => handleSettingsChange({ behaviorThreshold: Number(e.target.value) || 0 })}
-                  className="w-full p-2 border border-slate-300 rounded-lg text-sm"
-                />
-                <label className="block text-xs font-bold text-slate-500 uppercase">Behavior window (days)</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={settings.behaviorWindowDays}
-                  onChange={(e) => handleSettingsChange({ behaviorWindowDays: Number(e.target.value) || 0 })}
-                  className="w-full p-2 border border-slate-300 rounded-lg text-sm"
-                />
-                <label className="block text-xs font-bold text-slate-500 uppercase">Indication mismatch severity</label>
-                <select
-                  value={settings.indicationMismatchSeverity}
-                  onChange={(e) => handleSettingsChange({ indicationMismatchSeverity: e.target.value as AppSettings['indicationMismatchSeverity'] })}
-                  className="w-full p-2 border border-slate-300 rounded-lg text-sm"
-                >
-                  <option value="WARNING">Warning</option>
-                  <option value="CRITICAL">Critical</option>
-                </select>
-              </div>
-              <div className="space-y-3">
-                <label className="block text-xs font-bold text-slate-500 uppercase">Indication mapping table</label>
-                <textarea
-                  value={indicationMapText}
-                  onChange={(e) => setIndicationMapText(e.target.value)}
-                  onBlur={() => handleSettingsChange({ indicationMap: parseIndicationMap(indicationMapText, settings) })}
-                  className="w-full min-h-[180px] p-2 border border-slate-300 rounded-lg text-xs font-mono"
-                  placeholder="Class: indication1, indication2"
-                />
-                <p className="text-[11px] text-slate-400">Format: Class: indication1, indication2</p>
-              </div>
-              <div className="space-y-3">
-                <label className="block text-xs font-bold text-slate-500 uppercase">Custom medication classification</label>
-                <textarea
-                  value={customMedMapText}
-                  onChange={(e) => setCustomMedMapText(e.target.value)}
-                  onBlur={() => handleSettingsChange({ customMedicationMap: parseCustomMedMap(customMedMapText, settings) })}
-                  className="w-full min-h-[180px] p-2 border border-slate-300 rounded-lg text-xs font-mono"
-                  placeholder="drug name = Class"
-                />
-                <p className="text-[11px] text-slate-400">Format: drug name = Class (matches normalized names)</p>
-              </div>
-            </div>
           </div>
 
           <div className="no-print">
