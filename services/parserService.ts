@@ -155,6 +155,26 @@ const classifyMedication = (medName: string, customMap?: Record<string, Medicati
   return "Other";
 };
 
+const CLASS_LABELS: Array<{ pattern: RegExp; class: MedicationClass }> = [
+  { pattern: /antipsychotics\s*\/\s*antimanic agents/i, class: 'Antipsychotic' }
+];
+
+const extractMedicationClass = (text: string): { classOverride?: MedicationClass; cleanedText: string } => {
+  let cleanedText = text;
+  let classOverride: MedicationClass | undefined;
+
+  for (const label of CLASS_LABELS) {
+    const match = cleanedText.match(label.pattern);
+    if (match) {
+      classOverride = label.class;
+      cleanedText = cleanedText.replace(match[0], '').trim();
+      break;
+    }
+  }
+
+  return { classOverride, cleanedText };
+};
+
 export const parseMeds = (raw: string, customMap?: Record<string, MedicationClass>): Medication[] => {
   const meds: Medication[] = [];
   const lines = raw.split(/\r?\n/);
@@ -180,7 +200,12 @@ export const parseMeds = (raw: string, customMap?: Record<string, MedicationClas
         cleanText = cleanText.replace(dateMatch[0], "").trim();
     }
 
-    // 2. Extract Indication
+    // 2. Extract Class Label
+    const classExtraction = extractMedicationClass(cleanText);
+    let classOverride = classExtraction.classOverride;
+    cleanText = classExtraction.cleanedText;
+
+    // 3. Extract Indication
     let indication = "Unknown";
     const indicationMatch = cleanText.match(/\bfor\s+([a-zA-Z0-9\s/.,\-]+?)(?=\s*$|\s+(?:Start|Date|Give|Take|Apply|Inject|Inhale|Use|By|Orally|Topically))/i);
     
@@ -220,7 +245,7 @@ export const parseMeds = (raw: string, customMap?: Record<string, MedicationClas
         }
     }
 
-    // 3. Separate Name/Dose from Sig/Frequency
+    // 4. Separate Name/Dose from Sig/Frequency
     // Strategy: Look for the *start* of the instruction (sig).
     // Common starts: "Give", "Take", "Apply", or "1 tablet", "2 puffs", "One capsule"
     
@@ -246,7 +271,7 @@ export const parseMeds = (raw: string, customMap?: Record<string, MedicationClas
         frequency = "See Order"; // If we can't find a sig, label it.
     }
 
-    // 4. Refine Drug Name vs Dose String
+    // 5. Refine Drug Name vs Dose String
     // drugNameAndDose might be "Abilify Oral Tablet 2 MG"
     // We want drugName="Abilify", Dose="Oral Tablet 2 MG" (or just full display)
     
@@ -281,7 +306,7 @@ export const parseMeds = (raw: string, customMap?: Record<string, MedicationClas
       nameRaw,
       nameNorm,
       class: classifyMedication(nameRaw, customMap),
-      classOverride: undefined,
+      classOverride,
       frequency: frequency, 
       dose: drugNameAndDose, // Using the full name+strength string as dose/display for now
       startDate,
