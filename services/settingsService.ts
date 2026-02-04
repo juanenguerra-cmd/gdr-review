@@ -6,12 +6,46 @@ export const DEFAULT_SETTINGS: AppSettings = {
   behaviorWindowDays: 56,
   indicationMismatchSeverity: 'WARNING',
   indicationMap: {
-    'Antipsychotic': ['Schizophrenia', 'Schizoaffective disorder', 'Bipolar disorder', 'Psychosis', 'Tourette', 'Huntington'],
-    'Antidepressant': ['Major depressive disorder', 'Depression', 'Anxiety', 'Panic disorder', 'PTSD', 'OCD'],
-    'Anxiolytic': ['Generalized anxiety disorder', 'Anxiety', 'Panic disorder'],
-    'Hypnotic/Sedative': ['Insomnia', 'Sleep disorder'],
-    'Mood Stabilizer': ['Bipolar disorder', 'Mood disorder'],
-    'Cognitive Enhancer': ['Alzheimer disease', 'Dementia', 'Cognitive impairment'],
+    'ADHD/ANTI-NARCOLEPSY/ANTI-OBESITY/ANOREXIANTS': [
+      'ADHD',
+      'Narcolepsy/excessive daytime sleepiness',
+      'Appetite suppression/weight loss'
+    ],
+    'ANTIANXIETY AGENTS': [
+      'Anxiety (generalized/situational)',
+      'Panic attacks',
+      'Acute agitation/anxiety episodes',
+      'Alcohol withdrawal (short-term/protocol)'
+    ],
+    'ANTIDEPRESSANTS': [
+      'Depression',
+      'Anxiety disorders',
+      'Neuropathic/chronic pain (some agents)',
+      'Insomnia/sleep (some agents)',
+      'OCD/PTSD (some agents)',
+      'Appetite/weight issues (some agents)'
+    ],
+    'ANTIPSYCHOTICS/ANTIMANIC AGENTS': [
+      'Schizophrenia/psychotic disorders',
+      'Bipolar disorder/mania',
+      'Hallucinations/delusions/paranoia',
+      'Severe agitation/aggression related to qualifying psych condition',
+      'Adjunct mood stabilization (agent-dependent)'
+    ],
+    'HYPNOTICS/SEDATIVES/SLEEP DISORDER AGENTS': [
+      'Insomnia (sleep onset or maintenance)',
+      'Sleep disturbance',
+      'Circadian rhythm/sleep-wake disorders',
+      'Short-term sedation (situational)'
+    ],
+    'PSYCHOTHERAPEUTIC AND NEUROLOGICAL AGENTS - MISC.': [
+      'Seizures',
+      'Mood stabilization/behavior control (agent-dependent)',
+      'Neuropathic pain',
+      'Migraine prevention',
+      'Movement/tremor disorders',
+      'Other CNS indications per formulary'
+    ],
     'Other': []
   },
   customMedicationMap: {}

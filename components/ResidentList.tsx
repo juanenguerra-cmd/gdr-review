@@ -72,7 +72,7 @@ export const ResidentList: React.FC<Props> = ({ residents, onSelect }) => {
                     {r.meds.length > 0 ? (
                       <div className="flex flex-wrap gap-1">
                         {r.meds.map((m, i) => (
-                          <span key={i} className={`text-xs px-2 py-0.5 rounded border ${(m.classOverride || m.class) === 'Antipsychotic' ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-slate-50 border-slate-200 text-slate-600'} print:border-black print:text-black print:bg-transparent`}>
+                          <span key={i} className={`text-xs px-2 py-0.5 rounded border ${(m.classOverride || m.class) === 'ANTIPSYCHOTICS/ANTIMANIC AGENTS' ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-slate-50 border-slate-200 text-slate-600'} print:border-black print:text-black print:bg-transparent`}>
                             {m.drug}
                           </span>
                         ))}

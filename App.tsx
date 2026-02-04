@@ -86,8 +86,12 @@ const parseCustomMedMap = (raw: string, fallback: AppSettings): AppSettings['cus
 
 const normalizeMedicationClass = (value?: string): string => {
   if (!value) return 'Other';
-  if (value === 'Hypnotic') return 'Hypnotic/Sedative';
-  if (value === 'Mood stabilizer' || value === 'Mood Stabilizer') return 'Mood Stabilizer';
+  if (value === 'Hypnotic' || value === 'Hypnotic/Sedative') return 'HYPNOTICS/SEDATIVES/SLEEP DISORDER AGENTS';
+  if (value === 'Antipsychotic') return 'ANTIPSYCHOTICS/ANTIMANIC AGENTS';
+  if (value === 'Antidepressant') return 'ANTIDEPRESSANTS';
+  if (value === 'Anxiolytic') return 'ANTIANXIETY AGENTS';
+  if (value === 'Mood stabilizer' || value === 'Mood Stabilizer') return 'PSYCHOTHERAPEUTIC AND NEUROLOGICAL AGENTS - MISC.';
+  if (value === 'Cognitive Enhancer') return 'PSYCHOTHERAPEUTIC AND NEUROLOGICAL AGENTS - MISC.';
   return value;
 };
 
@@ -220,7 +224,7 @@ function App() {
             ensureResident(mrn);
             currentMonthData[mrn].meds = meds;
             
-            const firstAP = meds.filter(m => (m.classOverride || m.class) === 'Antipsychotic' && m.startDate)
+            const firstAP = meds.filter(m => (m.classOverride || m.class) === 'ANTIPSYCHOTICS/ANTIMANIC AGENTS' && m.startDate)
                                 .sort((a, b) => new Date(a.startDate!).getTime() - new Date(b.startDate!).getTime())[0];
             
             if (firstAP && !currentMonthData[mrn].compliance.firstAntipsychoticDate) {

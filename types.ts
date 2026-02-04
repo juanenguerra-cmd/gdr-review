@@ -36,12 +36,12 @@ export interface Resident {
 }
 
 export type MedicationClass =
-  | 'Antipsychotic'
-  | 'Antidepressant'
-  | 'Anxiolytic'
-  | 'Hypnotic/Sedative'
-  | 'Mood Stabilizer'
-  | 'Cognitive Enhancer'
+  | 'ADHD/ANTI-NARCOLEPSY/ANTI-OBESITY/ANOREXIANTS'
+  | 'ANTIANXIETY AGENTS'
+  | 'ANTIDEPRESSANTS'
+  | 'ANTIPSYCHOTICS/ANTIMANIC AGENTS'
+  | 'HYPNOTICS/SEDATIVES/SLEEP DISORDER AGENTS'
+  | 'PSYCHOTHERAPEUTIC AND NEUROLOGICAL AGENTS - MISC.'
   | 'Other';
 
 export interface Medication {
