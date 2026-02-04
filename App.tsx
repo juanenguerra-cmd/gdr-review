@@ -1,8 +1,9 @@
-import React, { useState, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning } from 'lucide-react';
-import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry } from './types';
-import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors } from './services/parserService';
+import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData } from './types';
+import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors } from './services/parserService';
 import { evaluateResidentCompliance } from './services/complianceService';
+import { DEFAULT_SETTINGS, normalizeSettings } from './services/settingsService';
 import { LockScreen } from './components/LockScreen';
 import { ParserModal } from './components/ParserModal';
 import { ResidentList } from './components/ResidentList';
@@ -28,6 +29,67 @@ const PrintStyles = () => (
   `}</style>
 );
 
+const createDefaultManualGdr = (): ManualGdrData => ({
+  status: 'NOT_SET',
+  contraindications: {
+    symptomsReturned: false,
+    additionalGdrLikelyToImpair: false,
+    riskToSelfOrOthers: false,
+    other: false,
+    otherText: ''
+  },
+  note: '',
+  updatedAt: undefined,
+  updatedBy: ''
+});
+
+const formatIndicationMap = (settings: AppSettings): string => {
+  return Object.entries(settings.indicationMap)
+    .map(([cls, items]) => `${cls}: ${items.join(', ')}`)
+    .join('\n');
+};
+
+const parseIndicationMap = (raw: string, fallback: AppSettings): AppSettings['indicationMap'] => {
+  const map = { ...fallback.indicationMap };
+  raw.split(/\r?\n/).forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const [cls, rest] = trimmed.split(':');
+    if (!cls || rest === undefined) return;
+    const key = cls.trim() as keyof AppSettings['indicationMap'];
+    const values = rest.split(',').map(v => v.trim()).filter(Boolean);
+    if (key) {
+      map[key] = values;
+    }
+  });
+  return map;
+};
+
+const formatCustomMedMap = (settings: AppSettings): string => {
+  return Object.entries(settings.customMedicationMap)
+    .map(([drug, cls]) => `${drug} = ${cls}`)
+    .join('\n');
+};
+
+const parseCustomMedMap = (raw: string, fallback: AppSettings): AppSettings['customMedicationMap'] => {
+  const map = { ...fallback.customMedicationMap };
+  raw.split(/\r?\n/).forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const [drug, cls] = trimmed.split('=');
+    if (!drug || !cls) return;
+    map[drug.trim().toLowerCase()] = cls.trim() as AppSettings['customMedicationMap'][string];
+  });
+  return map;
+};
+
+const normalizeMedicationClass = (value?: string): string => {
+  if (!value) return 'Other';
+  if (value === 'Hypnotic') return 'Hypnotic/Sedative';
+  if (value === 'Mood stabilizer' || value === 'Mood Stabilizer') return 'Mood Stabilizer';
+  return value;
+};
+
 function App() {
   const [reviews, setReviews] = useState<Record<string, Record<string, ResidentData>>>({});
   const [selectedMonth, setSelectedMonth] = useState<string>(new Date().toISOString().slice(0, 7));
@@ -35,6 +97,9 @@ function App() {
   const [isLocked, setIsLocked] = useState(false);
   const [showParser, setShowParser] = useState(false);
   const [showReport, setShowReport] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [indicationMapText, setIndicationMapText] = useState(() => formatIndicationMap(DEFAULT_SETTINGS));
+  const [customMedMapText, setCustomMedMapText] = useState(() => formatCustomMedMap(DEFAULT_SETTINGS));
 
 
   const [, setAuditLog] = useState<string[]>([]);
@@ -44,6 +109,11 @@ function App() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [psychOnly, setPsychOnly] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setIndicationMapText(formatIndicationMap(settings));
+    setCustomMedMapText(formatCustomMedMap(settings));
+  }, [settings]);
 
   const addGlobalLog = (action: string) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -56,6 +126,51 @@ function App() {
     type
   });
 
+  const normalizeResident = (resident: ResidentData): ResidentData => {
+    const normalizedMeds = (resident.meds || []).map((med) => ({
+      ...med,
+      nameRaw: med.nameRaw || med.display || med.drug,
+      nameNorm: med.nameNorm || (med.drug || '').toLowerCase(),
+      class: normalizeMedicationClass(med.class) as ResidentData['meds'][number]['class'],
+      classOverride: med.classOverride ? (normalizeMedicationClass(med.classOverride) as ResidentData['meds'][number]['class']) : med.classOverride
+    }));
+    return {
+      ...resident,
+      meds: normalizedMeds,
+      consults: resident.consults || [],
+      behaviors: resident.behaviors || [],
+      gdr: resident.gdr || [],
+      carePlan: resident.carePlan || [],
+      diagnoses: resident.diagnoses || [],
+      logs: resident.logs || [],
+      psychMdOrders: resident.psychMdOrders || [],
+      episodicBehaviors: resident.episodicBehaviors || [],
+      manualGdr: resident.manualGdr || createDefaultManualGdr(),
+      compliance: {
+        status: resident.compliance?.status || ComplianceStatus.UNKNOWN,
+        issues: resident.compliance?.issues || [],
+        lastGdrDate: resident.compliance?.lastGdrDate,
+        firstAntipsychoticDate: resident.compliance?.firstAntipsychoticDate,
+        gdrOverdue: resident.compliance?.gdrOverdue || false,
+        missingCarePlan: resident.compliance?.missingCarePlan || false,
+        missingConsent: resident.compliance?.missingConsent || false,
+        behaviorNotesCount: resident.compliance?.behaviorNotesCount,
+        carePlanPsychPresent: resident.compliance?.carePlanPsychPresent,
+        indicationStatus: resident.compliance?.indicationStatus,
+        consultStatus: resident.compliance?.consultStatus,
+        manualGdrStatus: resident.compliance?.manualGdrStatus
+      }
+    };
+  };
+
+  const recalculateCompliance = useCallback((monthData: Record<string, ResidentData>, month: string, settingsToUse: AppSettings) => {
+    const [y, m] = month.split('-').map(Number);
+    const lastDay = new Date(y, m, 0);
+    Object.keys(monthData).forEach(mrn => {
+      monthData[mrn] = evaluateResidentCompliance(monthData[mrn], lastDay, settingsToUse);
+    });
+  }, []);
+
   const handleParse = useCallback((type: ParseType, rawText: string, targetMonth: string) => {
     const currentMonthData = { ...(reviews[targetMonth] || {}) };
     let count = 0;
@@ -65,8 +180,9 @@ function App() {
         currentMonthData[mrn] = {
           mrn, name: 'Unknown', room: '', unit: '',
           meds: [], consults: [], behaviors: [], gdr: [], carePlan: [], diagnoses: [],
+          psychMdOrders: [], episodicBehaviors: [], manualGdr: createDefaultManualGdr(),
           logs: [createAuditEntry("Partial record created", "info")],
-          compliance: { status: ComplianceStatus.UNKNOWN, issues: [], gdrOverdue: false, missingCarePlan: false, missingConsent: false }
+          compliance: { status: ComplianceStatus.UNKNOWN, issues: [], gdrOverdue: false, missingCarePlan: false, missingConsent: false, manualGdrStatus: 'NOT_SET' }
         };
       }
       if (!currentMonthData[mrn].logs) currentMonthData[mrn].logs = [];
@@ -75,6 +191,9 @@ function App() {
       if (!currentMonthData[mrn].gdr) currentMonthData[mrn].gdr = [];
       if (!currentMonthData[mrn].carePlan) currentMonthData[mrn].carePlan = [];
       if (!currentMonthData[mrn].consults) currentMonthData[mrn].consults = [];
+      if (!currentMonthData[mrn].psychMdOrders) currentMonthData[mrn].psychMdOrders = [];
+      if (!currentMonthData[mrn].episodicBehaviors) currentMonthData[mrn].episodicBehaviors = [];
+      if (!currentMonthData[mrn].manualGdr) currentMonthData[mrn].manualGdr = createDefaultManualGdr();
     };
 
     switch (type) {
@@ -88,7 +207,7 @@ function App() {
         break;
       
       case ParseType.MEDS:
-        const parsedMeds = parseMeds(rawText);
+        const parsedMeds = parseMeds(rawText, settings.customMedicationMap);
         const medsByMrn = parsedMeds.reduce((acc, med) => {
             if(!acc[med.mrn]) acc[med.mrn] = [];
             acc[med.mrn].push(med);
@@ -99,7 +218,7 @@ function App() {
             ensureResident(mrn);
             currentMonthData[mrn].meds = meds;
             
-            const firstAP = meds.filter(m => m.class === 'Antipsychotic' && m.startDate)
+            const firstAP = meds.filter(m => (m.classOverride || m.class) === 'Antipsychotic' && m.startDate)
                                 .sort((a, b) => new Date(a.startDate!).getTime() - new Date(b.startDate!).getTime())[0];
             
             if (firstAP && !currentMonthData[mrn].compliance.firstAntipsychoticDate) {
@@ -146,6 +265,30 @@ function App() {
            });
            count = parsedConsults.length;
            break;
+
+      case ParseType.PSYCH_MD_ORDERS:
+           const parsedOrders = parsePsychMdOrders(rawText, Object.values(currentMonthData));
+           parsedOrders.forEach(order => {
+               ensureResident(order.mrn);
+               if (!currentMonthData[order.mrn].psychMdOrders.some(o => o.date === order.event.date && o.orderText === order.event.orderText)) {
+                 currentMonthData[order.mrn].psychMdOrders.push(order.event);
+                 currentMonthData[order.mrn].logs.push(createAuditEntry(`Psych MD order added: ${order.event.date}`, 'update'));
+               }
+           });
+           count = parsedOrders.length;
+           break;
+
+      case ParseType.EPISODIC_BEHAVIORS:
+           const parsedEpisodes = parseEpisodicBehaviors(rawText);
+           parsedEpisodes.forEach(({ mrn, event }) => {
+             ensureResident(mrn);
+             if (!currentMonthData[mrn].episodicBehaviors.some(b => b.date === event.date && b.snippet === event.snippet)) {
+               currentMonthData[mrn].episodicBehaviors.push(event);
+               currentMonthData[mrn].logs.push(createAuditEntry(`Episodic behavior added: ${event.date}`, 'update'));
+             }
+           });
+           count = parsedEpisodes.length;
+           break;
       
       case ParseType.GDR:
            const parsedGdr = parseGdr(rawText);
@@ -160,21 +303,41 @@ function App() {
            break;
     }
 
-    const [y, m] = targetMonth.split('-').map(Number);
-    const lastDay = new Date(y, m, 0);
-    
-    Object.keys(currentMonthData).forEach(mrn => {
-        currentMonthData[mrn] = evaluateResidentCompliance(currentMonthData[mrn], lastDay);
-    });
+    recalculateCompliance(currentMonthData, targetMonth, settings);
 
     setReviews(prev => ({ ...prev, [targetMonth]: currentMonthData }));
     setSelectedMonth(targetMonth);
     addGlobalLog(`Parsed ${type} for ${targetMonth} - processed ${count} items.`);
-  }, [reviews]);
+  }, [reviews, settings, recalculateCompliance]);
 
   const currentResidents = useMemo(() => Object.values(reviews[selectedMonth] || {}), [reviews, selectedMonth]);
 
   const units = useMemo(() => Array.from(new Set(currentResidents.map(r => r.unit).filter(Boolean))).sort(), [currentResidents]);
+
+  const handleSettingsChange = (updates: Partial<AppSettings>) => {
+    const nextSettings = normalizeSettings({ ...settings, ...updates });
+    setSettings(nextSettings);
+    setReviews(prev => {
+      const monthData = prev[selectedMonth];
+      if (!monthData) return prev;
+      const updatedMonth = { ...monthData };
+      const customEntries = Object.entries(nextSettings.customMedicationMap);
+      if (customEntries.length > 0) {
+        Object.keys(updatedMonth).forEach(mrn => {
+          updatedMonth[mrn] = {
+            ...updatedMonth[mrn],
+            meds: updatedMonth[mrn].meds.map(med => {
+              const match = customEntries.find(([drug]) => med.nameNorm.includes(drug));
+              if (!match) return med;
+              return { ...med, class: match[1] };
+            })
+          };
+        });
+      }
+      recalculateCompliance(updatedMonth, selectedMonth, nextSettings);
+      return { ...prev, [selectedMonth]: updatedMonth };
+    });
+  };
 
   const filteredResidents = useMemo(() => {
     const term = filterText.toLowerCase();
@@ -182,7 +345,7 @@ function App() {
       (r.name.toLowerCase().includes(term) || r.mrn.toLowerCase().includes(term)) &&
       (unitFilter === "ALL" || r.unit === unitFilter) &&
       (statusFilter === "ALL" || r.compliance.status === statusFilter) &&
-      (!psychOnly || r.meds.some(m => m.class !== 'Other'))
+      (!psychOnly || r.meds.length > 0)
     ).sort((a,b) => a.name.localeCompare(b.name));
   }, [currentResidents, filterText, unitFilter, statusFilter, psychOnly]);
 
@@ -200,7 +363,7 @@ function App() {
   }, [reviews]);
 
   const handleExport = () => {
-      const dataStr = JSON.stringify(reviews, null, 2);
+      const dataStr = JSON.stringify({ reviews, settings }, null, 2);
       const blob = new Blob([dataStr], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -220,7 +383,19 @@ function App() {
       reader.onload = (event) => {
           try {
               const json = JSON.parse(event.target?.result as string);
-              setReviews(json);
+              const nextReviews = json.reviews ? json.reviews : json;
+              const nextSettings = normalizeSettings(json.settings || {});
+              const normalizedReviews: Record<string, Record<string, ResidentData>> = {};
+              Object.entries(nextReviews || {}).forEach(([month, data]) => {
+                const monthData: Record<string, ResidentData> = {};
+                Object.entries(data as Record<string, ResidentData>).forEach(([mrn, resident]) => {
+                  monthData[mrn] = normalizeResident(resident);
+                });
+                recalculateCompliance(monthData, month, nextSettings);
+                normalizedReviews[month] = monthData;
+              });
+              setSettings(nextSettings);
+              setReviews(normalizedReviews);
               addGlobalLog("Database restored from backup.");
               alert("Import successful.");
           } catch (err) { alert("Failed to parse JSON file."); }
@@ -245,6 +420,17 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
+  const updateResident = (mrn: string, updater: (resident: ResidentData) => ResidentData) => {
+    setReviews(prev => {
+      const monthData = prev[selectedMonth];
+      if (!monthData || !monthData[mrn]) return prev;
+      const updatedMonth = { ...monthData };
+      updatedMonth[mrn] = updater(updatedMonth[mrn]);
+      recalculateCompliance(updatedMonth, selectedMonth, settings);
+      return { ...prev, [selectedMonth]: updatedMonth };
+    });
+  };
+
   return (
     <div className="min-h-screen pb-12 print:bg-white print:pb-0">
       <PrintStyles />
@@ -257,6 +443,8 @@ function App() {
           <ResidentProfileModal 
               resident={selectedResidentData} 
               history={getResidentHistory(selectedResidentData.mrn)} 
+              settings={settings}
+              onUpdateResident={updateResident}
               onClose={() => setSelectedMrn(null)} 
           />
       )}
@@ -319,13 +507,81 @@ function App() {
                       </select>
                       <label className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm cursor-pointer hover:bg-white transition-colors">
                           <input type="checkbox" checked={psychOnly} onChange={e => setPsychOnly(e.target.checked)} className="form-checkbox h-4 w-4 rounded text-primary focus:ring-primary/50" />
-                          Psych Only
+                          Meds Parsed Only
                       </label>
                       <button onClick={handleDownloadReport} className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white rounded-lg font-bold text-sm transition-colors shadow-sm ml-2">
                         <Printer className="w-4 h-4"/> Download Printable Report
                       </button>
                   </div>
               </div>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 no-print">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-700">Settings</h2>
+                <p className="text-xs text-slate-500">Facility-friendly thresholds and mappings.</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="space-y-3">
+                <label className="block text-xs font-bold text-slate-500 uppercase">Psych consult window (days)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={settings.consultRecencyDays}
+                  onChange={(e) => handleSettingsChange({ consultRecencyDays: Number(e.target.value) || 0 })}
+                  className="w-full p-2 border border-slate-300 rounded-lg text-sm"
+                />
+                <label className="block text-xs font-bold text-slate-500 uppercase">Behavior threshold (notes)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={settings.behaviorThreshold}
+                  onChange={(e) => handleSettingsChange({ behaviorThreshold: Number(e.target.value) || 0 })}
+                  className="w-full p-2 border border-slate-300 rounded-lg text-sm"
+                />
+                <label className="block text-xs font-bold text-slate-500 uppercase">Behavior window (days)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={settings.behaviorWindowDays}
+                  onChange={(e) => handleSettingsChange({ behaviorWindowDays: Number(e.target.value) || 0 })}
+                  className="w-full p-2 border border-slate-300 rounded-lg text-sm"
+                />
+                <label className="block text-xs font-bold text-slate-500 uppercase">Indication mismatch severity</label>
+                <select
+                  value={settings.indicationMismatchSeverity}
+                  onChange={(e) => handleSettingsChange({ indicationMismatchSeverity: e.target.value as AppSettings['indicationMismatchSeverity'] })}
+                  className="w-full p-2 border border-slate-300 rounded-lg text-sm"
+                >
+                  <option value="WARNING">Warning</option>
+                  <option value="CRITICAL">Critical</option>
+                </select>
+              </div>
+              <div className="space-y-3">
+                <label className="block text-xs font-bold text-slate-500 uppercase">Indication mapping table</label>
+                <textarea
+                  value={indicationMapText}
+                  onChange={(e) => setIndicationMapText(e.target.value)}
+                  onBlur={() => handleSettingsChange({ indicationMap: parseIndicationMap(indicationMapText, settings) })}
+                  className="w-full min-h-[180px] p-2 border border-slate-300 rounded-lg text-xs font-mono"
+                  placeholder="Class: indication1, indication2"
+                />
+                <p className="text-[11px] text-slate-400">Format: Class: indication1, indication2</p>
+              </div>
+              <div className="space-y-3">
+                <label className="block text-xs font-bold text-slate-500 uppercase">Custom medication classification</label>
+                <textarea
+                  value={customMedMapText}
+                  onChange={(e) => setCustomMedMapText(e.target.value)}
+                  onBlur={() => handleSettingsChange({ customMedicationMap: parseCustomMedMap(customMedMapText, settings) })}
+                  className="w-full min-h-[180px] p-2 border border-slate-300 rounded-lg text-xs font-mono"
+                  placeholder="drug name = Class"
+                />
+                <p className="text-[11px] text-slate-400">Format: drug name = Class (matches normalized names)</p>
+              </div>
+            </div>
           </div>
 
           <div className="no-print">

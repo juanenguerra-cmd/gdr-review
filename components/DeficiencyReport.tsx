@@ -17,9 +17,11 @@ export const DeficiencyReport: React.FC<Props> = ({ residents, month, onClose })
       r.compliance.issues.forEach(issue => {
         // Normalize issue titles
         let key = issue.replace(/\(.*\)|`.+`|:.*/, '').trim();
-        if (key.includes("Inappropriate Indication")) key = "Inappropriate Indication";
-        if (key.includes("PRN Antipsychotic")) key = "PRN Antipsychotic > 14 Days";
-        if (key.includes("GDR")) key = "GDR Review Needed";
+        if (key.includes("Indication")) key = "Indication Review";
+        if (key.includes("GDR")) key = "Manual GDR Review";
+        if (key.includes("care plan")) key = "Care Plan Missing";
+        if (key.includes("behavior monitoring")) key = "Behavior Monitoring";
+        if (key.includes("psychiatry")) key = "Psychiatry Consult/Order";
 
         if (!groupedIssues[key]) {
           groupedIssues[key] = [];
@@ -118,8 +120,7 @@ export const DeficiencyReport: React.FC<Props> = ({ residents, month, onClose })
                                                     {resident.unit} / {resident.room}
                                                 </td>
                                                 <td className="px-4 py-2 align-top text-xs text-slate-500">
-                                                    {/* Find the specific issue text for this resident */}
-                                                    {resident.compliance.issues.find(i => i.includes(issueKey.split(' ')[0]))}
+                                                    {resident.compliance.issues.join('; ')}
                                                 </td>
                                             </tr>
                                         ))}

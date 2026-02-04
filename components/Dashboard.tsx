@@ -15,12 +15,10 @@ export const Dashboard: React.FC<Props> = ({ residents }) => {
   const critical = psychParams.filter(r => r.compliance.status === ComplianceStatus.CRITICAL).length;
 
   // GDR Specific Calculations
-  const antipsychoticCohort = residents.filter(r => r.meds.some(m => m.class === 'Antipsychotic'));
-  const gdrOverdue = antipsychoticCohort.filter(r => r.compliance.gdrOverdue).length;
-  const gdrWarning = antipsychoticCohort.filter(r => 
-    r.compliance.issues.some(i => i.toLowerCase().includes("gdr warning"))
-  ).length;
-  const gdrOnTrack = antipsychoticCohort.length - gdrOverdue - gdrWarning;
+  const gdrCohort = psychParams;
+  const gdrDone = gdrCohort.filter(r => r.manualGdr.status === 'DONE').length;
+  const gdrContra = gdrCohort.filter(r => r.manualGdr.status === 'CONTRAINDICATED').length;
+  const gdrNotSet = gdrCohort.filter(r => r.manualGdr.status === 'NOT_SET').length;
 
   const data = [
     { name: 'Compliant', value: compliant, color: '#22c55e' }, // green-500
@@ -64,21 +62,21 @@ export const Dashboard: React.FC<Props> = ({ residents }) => {
 
       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
         <div>
-          <p className="text-slate-500 text-xs font-bold uppercase tracking-wider">GDR Status</p>
-          <h3 className={`text-3xl font-bold mt-1 ${gdrOverdue > 0 ? 'text-red-600' : (gdrWarning > 0 ? 'text-yellow-600' : 'text-blue-600')}`}>
-            {gdrOnTrack}/{antipsychoticCohort.length}
+          <p className="text-slate-500 text-xs font-bold uppercase tracking-wider">Manual GDR Status</p>
+          <h3 className={`text-3xl font-bold mt-1 ${gdrNotSet > 0 ? 'text-red-600' : 'text-blue-600'}`}>
+            {gdrDone + gdrContra}/{gdrCohort.length}
           </h3>
         </div>
         <div className="mt-2 space-y-1">
           <div className="flex justify-between text-[10px] font-bold uppercase text-slate-400 tracking-tight">
-             <span className="text-green-600">On Track: {gdrOnTrack}</span>
-             <span className="text-yellow-600">Warning: {gdrWarning}</span>
-             <span className="text-red-600">Overdue: {gdrOverdue}</span>
+             <span className="text-green-600">Done: {gdrDone}</span>
+             <span className="text-amber-600">Contra: {gdrContra}</span>
+             <span className="text-red-600">Not Set: {gdrNotSet}</span>
           </div>
           <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden flex">
-            <div style={{ width: `${(gdrOnTrack / antipsychoticCohort.length) * 100}%` }} className="bg-green-500 h-full"></div>
-            <div style={{ width: `${(gdrWarning / antipsychoticCohort.length) * 100}%` }} className="bg-yellow-500 h-full"></div>
-            <div style={{ width: `${(gdrOverdue / antipsychoticCohort.length) * 100}%` }} className="bg-red-500 h-full"></div>
+            <div style={{ width: `${gdrCohort.length ? (gdrDone / gdrCohort.length) * 100 : 0}%` }} className="bg-green-500 h-full"></div>
+            <div style={{ width: `${gdrCohort.length ? (gdrContra / gdrCohort.length) * 100 : 0}%` }} className="bg-amber-500 h-full"></div>
+            <div style={{ width: `${gdrCohort.length ? (gdrNotSet / gdrCohort.length) * 100 : 0}%` }} className="bg-red-500 h-full"></div>
           </div>
         </div>
       </div>
