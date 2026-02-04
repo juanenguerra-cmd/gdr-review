@@ -96,6 +96,7 @@ const normalizeMedicationClass = (value?: string): string => {
 };
 
 function App() {
+  const appRef = useRef<HTMLDivElement>(null);
   const [reviews, setReviews] = useState<Record<string, Record<string, ResidentData>>>({});
   const [selectedMonth, setSelectedMonth] = useState<string>(new Date().toISOString().slice(0, 7));
   const [selectedMrn, setSelectedMrn] = useState<string | null>(null);
@@ -115,6 +116,44 @@ function App() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [psychOnly, setPsychOnly] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const element = appRef.current;
+    if (!element) return undefined;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+
+    const applyScale = () => {
+      const { innerWidth, innerHeight } = window;
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+
+      const scale = Math.min(1, innerWidth / rect.width, innerHeight / rect.height);
+      element.style.transform = `scale(${scale})`;
+      element.style.transformOrigin = 'top left';
+      element.style.width = scale < 1 ? `${(1 / scale) * 100}%` : '100%';
+      element.style.height = scale < 1 ? `${(1 / scale) * 100}%` : 'auto';
+      document.body.style.overflow = 'hidden';
+      document.documentElement.style.overflow = 'hidden';
+    };
+
+    applyScale();
+    const resizeObserver = new ResizeObserver(() => applyScale());
+    resizeObserver.observe(element);
+    window.addEventListener('resize', applyScale);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', applyScale);
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+      element.style.transform = '';
+      element.style.transformOrigin = '';
+      element.style.width = '';
+      element.style.height = '';
+    };
+  }, []);
 
   useEffect(() => {
     setIndicationMapText(formatIndicationMap(settings));
@@ -438,7 +477,7 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen pb-12 print:bg-white print:pb-0">
+    <div ref={appRef} className="min-h-screen pb-12 print:bg-white print:pb-0">
       <PrintStyles />
       <LockScreen isLocked={isLocked} onUnlock={() => setIsLocked(false)} />
       <input type="file" ref={fileInputRef} onChange={handleImportFile} accept=".json" className="hidden" />
