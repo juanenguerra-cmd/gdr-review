@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings } from 'lucide-react';
+import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud } from 'lucide-react';
 import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData } from './types';
 import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors } from './services/parserService';
 import { evaluateResidentCompliance } from './services/complianceService';
@@ -449,6 +449,14 @@ function App() {
       e.target.value = '';
   };
 
+  const handleOpenOneDriveFolder = () => {
+    if (!settings.oneDriveFolderUrl) {
+      alert("Add a OneDrive folder URL in Settings to open your backup location.");
+      return;
+    }
+    window.open(settings.oneDriveFolderUrl, "_blank", "noopener,noreferrer");
+  };
+
   const handleDownloadReport = () => {
     const content = document.getElementById('main-content')?.innerHTML;
     if (!content) return;
@@ -522,6 +530,7 @@ function App() {
             <div className="h-6 w-px bg-white/20 mx-1"></div>
             <button onClick={handleExport} className="p-2 hover:bg-white/20 rounded-full" title="Export Backup"><Download className="w-5 h-5" /></button>
             <button onClick={handleImportClick} className="p-2 hover:bg-white/20 rounded-full" title="Import Backup"><FileJson className="w-5 h-5" /></button>
+            <button onClick={handleOpenOneDriveFolder} className="p-2 hover:bg-white/20 rounded-full" title="Open OneDrive Backup Folder"><Cloud className="w-5 h-5" /></button>
             <div className="h-6 w-px bg-white/20 mx-1"></div>
             <button onClick={() => setShowSettingsModal(true)} className="p-2 hover:bg-white/20 rounded-full" title="Settings"><Settings className="w-5 h-5" /></button>
             <button onClick={() => setShowComplianceModal(true)} className="p-2 hover:bg-white/20 rounded-full" title="Regulatory Info"><HelpCircle className="w-5 h-5" /></button>

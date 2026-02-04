@@ -48,7 +48,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     ],
     'Other': []
   },
-  customMedicationMap: {}
+  customMedicationMap: {},
+  oneDriveFolderUrl: ''
 };
 
 export const normalizeSettings = (settings?: Partial<AppSettings>): AppSettings => {
