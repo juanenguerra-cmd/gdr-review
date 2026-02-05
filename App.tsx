@@ -191,6 +191,7 @@ function App() {
   const cloudSyncRef = useRef<number | null>(null);
   const cloudSyncInFlight = useRef(false);
   const scaleStateRef = useRef({ scale: 1 });
+  const [isMobileDevice, setIsMobileDevice] = useState(false);
 
   useEffect(() => {
     const element = appRef.current;
@@ -252,6 +253,12 @@ function App() {
     setIndicationMapErrors(validateIndicationMap(nextIndicationText));
     setCustomMedMapErrors(validateCustomMedMap(nextCustomMedText));
   }, [settings]);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return;
+    const userAgent = navigator.userAgent ?? '';
+    setIsMobileDevice(/Mobi|Android|iPhone|iPad|iPod/i.test(userAgent));
+  }, []);
 
   const normalizeResident = (resident: ResidentData): ResidentData => {
     const normalizedMeds = (resident.meds || []).map((med) => ({
@@ -989,6 +996,11 @@ function App() {
       </header>
 
       <main id="main-content" className="mx-auto w-full max-w-screen-2xl px-3 sm:px-4 lg:px-6 xl:px-8 2xl:px-12 py-8 print:p-0 print:mx-0">
+        {isMobileDevice && (
+          <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm">
+            Best viewed on iPhone Safari with Fit to Screen enabled.
+          </div>
+        )}
         <div className="hidden print:block mb-8 border-b border-black pb-4">
             <h1 className="text-2xl font-bold text-black">Compliance Review Report</h1>
             <p className="text-sm text-gray-600">Review Month: {selectedMonth} | Generated: {new Date().toLocaleString()}</p>
