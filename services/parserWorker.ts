@@ -1,3 +1,5 @@
+/// <reference lib="webworker" />
+
 import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors } from './parserService';
 import { ParseType } from '../types';
 import { ParserWorkerRequest, ParserWorkerResponse } from './parserWorkerTypes';

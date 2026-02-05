@@ -190,6 +190,12 @@ function App() {
 
     worker.onerror = (event) => {
       addGlobalLog(`Parser worker error: ${event.message}`);
+      parserWorkerCallbacks.current.forEach(({ reject }, id) => {
+        reject(new Error(`Parser worker error: ${event.message || 'unknown error'}`));
+        parserWorkerCallbacks.current.delete(id);
+      });
+      worker.terminate();
+      parserWorkerRef.current = null;
     };
 
     return () => {
