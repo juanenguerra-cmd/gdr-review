@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Lock } from 'lucide-react';
 
 interface Props {
@@ -7,7 +7,25 @@ interface Props {
 }
 
 export const LockScreen: React.FC<Props> = ({ isLocked, onUnlock }) => {
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (isLocked) {
+      setPassword('');
+      setError('');
+    }
+  }, [isLocked]);
+
   if (!isLocked) return null;
+
+  const handleUnlock = () => {
+    if (password === '120316') {
+      onUnlock();
+      return;
+    }
+    setError('Incorrect password. Please try again.');
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
@@ -19,12 +37,22 @@ export const LockScreen: React.FC<Props> = ({ isLocked, onUnlock }) => {
         <p className="text-slate-500 mb-8 text-sm leading-relaxed">
           This screen is locked to protect Resident Health Information in compliance with HIPAA and NYSDOH privacy regulations.
         </p>
-        <button
-          onClick={onUnlock}
-          className="w-full bg-primary hover:bg-secondary text-white font-bold py-3 px-6 rounded-xl transition-all shadow-lg shadow-blue-900/20"
-        >
-          Unlock Application
-        </button>
+        <div className="space-y-3">
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="Enter unlock password"
+            className="w-full p-3 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+          />
+          {error && <div className="text-xs text-rose-600 font-semibold">{error}</div>}
+          <button
+            onClick={handleUnlock}
+            className="w-full bg-primary hover:bg-secondary text-white font-bold py-3 px-6 rounded-xl transition-all shadow-lg shadow-blue-900/20"
+          >
+            Unlock Application
+          </button>
+        </div>
       </div>
     </div>
   );
