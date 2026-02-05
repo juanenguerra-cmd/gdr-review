@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud } from 'lucide-react';
-import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData } from './types';
+import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData, SettingsLineError } from './types';
 import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors } from './services/parserService';
 import { evaluateResidentCompliance } from './services/complianceService';
 import { DEFAULT_SETTINGS, normalizeSettings } from './services/settingsService';
@@ -60,20 +60,31 @@ const formatIndicationMap = (settings: AppSettings): string => {
     .join('\n');
 };
 
-const parseIndicationMap = (raw: string, fallback: AppSettings): AppSettings['indicationMap'] => {
+const parseIndicationMapWithErrors = (
+  raw: string,
+  fallback: AppSettings
+): { map: AppSettings['indicationMap']; errors: SettingsLineError[] } => {
   const map = { ...fallback.indicationMap };
-  raw.split(/\r?\n/).forEach(line => {
+  const errors: SettingsLineError[] = [];
+  raw.split(/\r?\n/).forEach((line, index) => {
+    const lineNumber = index + 1;
     const trimmed = line.trim();
     if (!trimmed) return;
-    const [cls, rest] = trimmed.split(':');
-    if (!cls || rest === undefined) return;
-    const key = cls.trim() as keyof AppSettings['indicationMap'];
-    const values = rest.split(',').map(v => v.trim()).filter(Boolean);
-    if (key) {
-      map[key] = values;
+    const [cls, ...restParts] = trimmed.split(':');
+    if (!cls || restParts.length === 0) {
+      errors.push({ line: lineNumber, message: 'Expected "Class: indication1, indication2".' });
+      return;
     }
+    const key = cls.trim() as keyof AppSettings['indicationMap'];
+    const rest = restParts.join(':');
+    const values = rest.split(',').map(v => v.trim()).filter(Boolean);
+    if (!key || values.length === 0) {
+      errors.push({ line: lineNumber, message: 'Provide a class name and at least one indication.' });
+      return;
+    }
+    map[key] = values;
   });
-  return map;
+  return { map, errors };
 };
 
 const formatCustomMedMap = (settings: AppSettings): string => {
@@ -82,16 +93,29 @@ const formatCustomMedMap = (settings: AppSettings): string => {
     .join('\n');
 };
 
-const parseCustomMedMap = (raw: string, fallback: AppSettings): AppSettings['customMedicationMap'] => {
+const parseCustomMedMapWithErrors = (
+  raw: string,
+  fallback: AppSettings
+): { map: AppSettings['customMedicationMap']; errors: SettingsLineError[] } => {
   const map = { ...fallback.customMedicationMap };
-  raw.split(/\r?\n/).forEach(line => {
+  const errors: SettingsLineError[] = [];
+  raw.split(/\r?\n/).forEach((line, index) => {
+    const lineNumber = index + 1;
     const trimmed = line.trim();
     if (!trimmed) return;
-    const [drug, cls] = trimmed.split('=');
-    if (!drug || !cls) return;
-    map[drug.trim().toLowerCase()] = cls.trim() as AppSettings['customMedicationMap'][string];
+    const [drug, ...restParts] = trimmed.split('=');
+    if (!drug || restParts.length === 0) {
+      errors.push({ line: lineNumber, message: 'Expected "drug name = Class".' });
+      return;
+    }
+    const cls = restParts.join('=').trim();
+    if (!drug.trim() || !cls) {
+      errors.push({ line: lineNumber, message: 'Provide both a drug name and a class.' });
+      return;
+    }
+    map[drug.trim().toLowerCase()] = cls as AppSettings['customMedicationMap'][string];
   });
-  return map;
+  return { map, errors };
 };
 
 const normalizeMedicationClass = (value?: string): string => {
@@ -117,6 +141,8 @@ function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [indicationMapText, setIndicationMapText] = useState(() => formatIndicationMap(DEFAULT_SETTINGS));
   const [customMedMapText, setCustomMedMapText] = useState(() => formatCustomMedMap(DEFAULT_SETTINGS));
+  const [indicationMapErrors, setIndicationMapErrors] = useState<SettingsLineError[]>([]);
+  const [customMedMapErrors, setCustomMedMapErrors] = useState<SettingsLineError[]>([]);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
 
 
@@ -170,6 +196,8 @@ function App() {
   useEffect(() => {
     setIndicationMapText(formatIndicationMap(settings));
     setCustomMedMapText(formatCustomMedMap(settings));
+    setIndicationMapErrors([]);
+    setCustomMedMapErrors([]);
   }, [settings]);
 
   const addGlobalLog = useCallback((action: string) => {
@@ -429,7 +457,7 @@ function App() {
 
   const units = useMemo(() => Array.from(new Set(currentResidents.map(r => r.unit).filter(Boolean))).sort(), [currentResidents]);
 
-  const handleSettingsChange = (updates: Partial<AppSettings>) => {
+  const handleSettingsChange = useCallback((updates: Partial<AppSettings>) => {
     const nextSettings = normalizeSettings({ ...settings, ...updates });
     setSettings(nextSettings);
     setReviews(prev => {
@@ -452,7 +480,37 @@ function App() {
       recalculateCompliance(updatedMonth, selectedMonth, nextSettings);
       return { ...prev, [selectedMonth]: updatedMonth };
     });
-  };
+  }, [recalculateCompliance, selectedMonth, settings]);
+
+  const handleIndicationMapTextChange = useCallback((value: string) => {
+    setIndicationMapText(value);
+    const { errors } = parseIndicationMapWithErrors(value, settings);
+    setIndicationMapErrors(errors);
+  }, [settings]);
+
+  const handleCustomMedMapTextChange = useCallback((value: string) => {
+    setCustomMedMapText(value);
+    const { errors } = parseCustomMedMapWithErrors(value, settings);
+    setCustomMedMapErrors(errors);
+  }, [settings]);
+
+  const handleIndicationMapBlur = useCallback(() => {
+    const { map, errors } = parseIndicationMapWithErrors(indicationMapText, settings);
+    setIndicationMapErrors(errors);
+    if (errors.length > 0) {
+      return;
+    }
+    handleSettingsChange({ indicationMap: map });
+  }, [handleSettingsChange, indicationMapText, settings]);
+
+  const handleCustomMedMapBlur = useCallback(() => {
+    const { map, errors } = parseCustomMedMapWithErrors(customMedMapText, settings);
+    setCustomMedMapErrors(errors);
+    if (errors.length > 0) {
+      return;
+    }
+    handleSettingsChange({ customMedicationMap: map });
+  }, [customMedMapText, handleSettingsChange, settings]);
 
   const filteredResidents = useMemo(() => {
     const term = filterText.toLowerCase();
@@ -579,18 +637,20 @@ function App() {
 
       {showParser && <ParserModal isOpen={showParser} onClose={() => setShowParser(false)} onParse={handleParse} />}
       {showSettingsModal && (
-        <SettingsModal
-          isOpen={showSettingsModal}
-          onClose={() => setShowSettingsModal(false)}
-          settings={settings}
-          indicationMapText={indicationMapText}
-          customMedMapText={customMedMapText}
-          onSettingsChange={handleSettingsChange}
-          onIndicationMapTextChange={setIndicationMapText}
-          onCustomMedMapTextChange={setCustomMedMapText}
-          onIndicationMapBlur={() => handleSettingsChange({ indicationMap: parseIndicationMap(indicationMapText, settings) })}
-          onCustomMedMapBlur={() => handleSettingsChange({ customMedicationMap: parseCustomMedMap(customMedMapText, settings) })}
-        />
+          <SettingsModal
+            isOpen={showSettingsModal}
+            onClose={() => setShowSettingsModal(false)}
+            settings={settings}
+            indicationMapText={indicationMapText}
+            customMedMapText={customMedMapText}
+            indicationMapErrors={indicationMapErrors}
+            customMedMapErrors={customMedMapErrors}
+            onSettingsChange={handleSettingsChange}
+            onIndicationMapTextChange={handleIndicationMapTextChange}
+            onCustomMedMapTextChange={handleCustomMedMapTextChange}
+            onIndicationMapBlur={handleIndicationMapBlur}
+            onCustomMedMapBlur={handleCustomMedMapBlur}
+          />
       )}
       {showReport && <DeficiencyReport residents={filteredNonCompliantResidents} month={selectedMonth} onClose={() => setShowReport(false)} />}
       {selectedResidentData && (

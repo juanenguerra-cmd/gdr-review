@@ -132,6 +132,11 @@ export interface AppSettings {
   oneDriveFolderUrl: string;
 }
 
+export interface SettingsLineError {
+  line: number;
+  message: string;
+}
+
 export interface ResidentData extends Resident {
   meds: Medication[];
   consults: ConsultEvent[];
