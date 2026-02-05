@@ -44,6 +44,16 @@ const createDefaultManualGdr = (): ManualGdrData => ({
   updatedBy: ''
 });
 
+const STORAGE_KEY = 'gdr-compliance-tool:data';
+const STORAGE_VERSION = 1;
+
+type StoredPayload = {
+  version: number;
+  savedAt: string;
+  reviews: Record<string, Record<string, ResidentData>>;
+  settings: AppSettings;
+};
+
 const formatIndicationMap = (settings: AppSettings): string => {
   return Object.entries(settings.indicationMap)
     .map(([cls, items]) => `${cls}: ${items.join(', ')}`)
@@ -107,6 +117,7 @@ function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [indicationMapText, setIndicationMapText] = useState(() => formatIndicationMap(DEFAULT_SETTINGS));
   const [customMedMapText, setCustomMedMapText] = useState(() => formatCustomMedMap(DEFAULT_SETTINGS));
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
 
 
   const [, setAuditLog] = useState<string[]>([]);
@@ -116,6 +127,7 @@ function App() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [psychOnly, setPsychOnly] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasHydrated = useRef(false);
 
   useEffect(() => {
     const element = appRef.current;
@@ -160,10 +172,10 @@ function App() {
     setCustomMedMapText(formatCustomMedMap(settings));
   }, [settings]);
 
-  const addGlobalLog = (action: string) => {
+  const addGlobalLog = useCallback((action: string) => {
     const timestamp = new Date().toLocaleTimeString();
     setAuditLog((prev: string[]) => [`[${timestamp}] ${action}`, ...prev]);
-  };
+  }, []);
 
   const createAuditEntry = (message: string, type: AuditEntry['type'] = 'info'): AuditEntry => ({
     timestamp: new Date().toLocaleString(),
@@ -207,6 +219,64 @@ function App() {
       }
     };
   };
+
+  const hydrateFromPayload = useCallback((payload: StoredPayload) => {
+    const nextSettings = normalizeSettings(payload.settings || {});
+    const normalizedReviews: Record<string, Record<string, ResidentData>> = {};
+
+    Object.entries(payload.reviews || {}).forEach(([month, data]) => {
+      const monthData: Record<string, ResidentData> = {};
+      Object.entries(data as Record<string, ResidentData>).forEach(([mrn, resident]) => {
+        monthData[mrn] = normalizeResident(resident);
+      });
+      recalculateCompliance(monthData, month, nextSettings);
+      normalizedReviews[month] = monthData;
+    });
+
+    setSettings(nextSettings);
+    setReviews(normalizedReviews);
+    setLastSavedAt(payload.savedAt || null);
+  }, [normalizeResident, recalculateCompliance]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      hasHydrated.current = true;
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as StoredPayload;
+      if (!parsed || parsed.version !== STORAGE_VERSION) {
+        hasHydrated.current = true;
+        return;
+      }
+      hydrateFromPayload(parsed);
+      addGlobalLog("Local auto-save loaded.");
+    } catch {
+      // ignore malformed local storage data
+    } finally {
+      hasHydrated.current = true;
+    }
+  }, [hydrateFromPayload, addGlobalLog]);
+
+  useEffect(() => {
+    if (!hasHydrated.current) return;
+    const payload: StoredPayload = {
+      version: STORAGE_VERSION,
+      savedAt: new Date().toISOString(),
+      reviews,
+      settings
+    };
+    const timeout = window.setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+        setLastSavedAt(payload.savedAt);
+      } catch {
+        // ignore storage errors (quota, etc.)
+      }
+    }, 500);
+    return () => window.clearTimeout(timeout);
+  }, [reviews, settings]);
 
   const recalculateCompliance = useCallback((monthData: Record<string, ResidentData>, month: string, settingsToUse: AppSettings) => {
     const [y, m] = month.split('-').map(Number);
@@ -408,7 +478,13 @@ function App() {
   }, [reviews]);
 
   const handleExport = () => {
-      const dataStr = JSON.stringify({ reviews, settings }, null, 2);
+      const payload: StoredPayload = {
+        version: STORAGE_VERSION,
+        savedAt: new Date().toISOString(),
+        reviews,
+        settings
+      };
+      const dataStr = JSON.stringify(payload, null, 2);
       const blob = new Blob([dataStr], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -428,19 +504,20 @@ function App() {
       reader.onload = (event) => {
           try {
               const json = JSON.parse(event.target?.result as string);
-              const nextReviews = json.reviews ? json.reviews : json;
-              const nextSettings = normalizeSettings(json.settings || {});
-              const normalizedReviews: Record<string, Record<string, ResidentData>> = {};
-              Object.entries(nextReviews || {}).forEach(([month, data]) => {
-                const monthData: Record<string, ResidentData> = {};
-                Object.entries(data as Record<string, ResidentData>).forEach(([mrn, resident]) => {
-                  monthData[mrn] = normalizeResident(resident);
-                });
-                recalculateCompliance(monthData, month, nextSettings);
-                normalizedReviews[month] = monthData;
-              });
-              setSettings(nextSettings);
-              setReviews(normalizedReviews);
+              const payload: StoredPayload = json.reviews
+                ? {
+                    version: json.version || STORAGE_VERSION,
+                    savedAt: json.savedAt || new Date().toISOString(),
+                    reviews: json.reviews,
+                    settings: json.settings || DEFAULT_SETTINGS
+                  }
+                : {
+                    version: STORAGE_VERSION,
+                    savedAt: new Date().toISOString(),
+                    reviews: json,
+                    settings: DEFAULT_SETTINGS
+                  };
+              hydrateFromPayload(payload);
               addGlobalLog("Database restored from backup.");
               alert("Import successful.");
           } catch (err) { alert("Failed to parse JSON file."); }
@@ -455,6 +532,16 @@ function App() {
       return;
     }
     window.open(settings.oneDriveFolderUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const handleCloudSync = () => {
+    if (!settings.oneDriveFolderUrl) {
+      alert("Add a OneDrive folder URL in Settings to sync backups.");
+      return;
+    }
+    handleExport();
+    handleOpenOneDriveFolder();
+    addGlobalLog("Backup exported for OneDrive sync.");
   };
 
   const handleDownloadReport = () => {
@@ -530,13 +617,18 @@ function App() {
             <div className="h-6 w-px bg-white/20 mx-1"></div>
             <button onClick={handleExport} className="p-2 hover:bg-white/20 rounded-full" title="Export Backup"><Download className="w-5 h-5" /></button>
             <button onClick={handleImportClick} className="p-2 hover:bg-white/20 rounded-full" title="Import Backup"><FileJson className="w-5 h-5" /></button>
-            <button onClick={handleOpenOneDriveFolder} className="p-2 hover:bg-white/20 rounded-full" title="Open OneDrive Backup Folder"><Cloud className="w-5 h-5" /></button>
+            <button onClick={handleCloudSync} className="p-2 hover:bg-white/20 rounded-full" title="Sync Backup to OneDrive"><Cloud className="w-5 h-5" /></button>
             <div className="h-6 w-px bg-white/20 mx-1"></div>
             <button onClick={() => setShowSettingsModal(true)} className="p-2 hover:bg-white/20 rounded-full" title="Settings"><Settings className="w-5 h-5" /></button>
             <button onClick={() => setShowComplianceModal(true)} className="p-2 hover:bg-white/20 rounded-full" title="Regulatory Info"><HelpCircle className="w-5 h-5" /></button>
             <button onClick={() => setIsLocked(true)} className="p-2 hover:bg-white/20 rounded-full text-yellow-300" title="Lock Screen"><Lock className="w-5 h-5" /></button>
           </div>
         </div>
+        {lastSavedAt && (
+          <div className="max-w-7xl mx-auto px-4 pb-2 flex justify-end text-[11px] text-blue-100 opacity-80">
+            Auto-saved {new Date(lastSavedAt).toLocaleString()}
+          </div>
+        )}
       </header>
 
       <main id="main-content" className="max-w-7xl mx-auto px-4 py-8 print:p-0 print:mx-0">

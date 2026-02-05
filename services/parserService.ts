@@ -402,7 +402,108 @@ export const parseCarePlans = (raw: string): { mrn: string; item: CarePlanItem }
 };
 
 export const parseGdr = (_raw: string): { mrn: string; event: GdrEvent }[] => {
-    return []; 
+  const results: { mrn: string; event: GdrEvent }[] = [];
+  const lines = _raw.split(/\r?\n/);
+  let currentMrn = "";
+  let buffer: string[] = [];
+
+  const extractLabeledDate = (text: string, label: RegExp): string => {
+    const match = text.match(label);
+    if (!match) return "";
+    const dateMatch = match[1] || match[2] || "";
+    return parseDateString(dateMatch);
+  };
+
+  const extractFirstDate = (text: string): string => {
+    const match = text.match(REGEX_DATE_SLASH);
+    return match ? parseDateString(match[0]) : "";
+  };
+
+  const extractStatus = (text: string): string => {
+    const statusMatch = text.match(/status[:\s-]*([a-z0-9\s/().-]+)/i);
+    if (statusMatch) {
+      const cleaned = statusMatch[1]
+        .split(/(?:last psych|psych eval|status date|gdr date|date)/i)[0]
+        .trim();
+      if (cleaned) return cleaned;
+    }
+    if (/contraindicat/i.test(text)) return "Contraindicated";
+    if (/fail|unsuccess|unable|declin|refus/i.test(text)) return "Failed";
+    if (/reduc|decreas|discontinu|taper/i.test(text)) return "Reduction";
+    if (/pending|due|overdue|scheduled/i.test(text)) return "Pending";
+    return "Unknown";
+  };
+
+  const extractMedicationAndDose = (text: string): { medication?: string; dose?: string } => {
+    const labelMatch = text.match(/(?:medication|drug|psychotropic|med)\s*[:\-]\s*([^;]+?)(?=(?:\bstatus\b|\bdate\b|\bpsych\b|$))/i);
+    const source = labelMatch ? labelMatch[1] : text;
+    const doseMatch = source.match(/(\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|units?|tabs?|tablets?|caps?|capsules?))/i);
+    const dose = doseMatch ? doseMatch[1].trim() : undefined;
+    let medication = source;
+    if (doseMatch) medication = source.replace(doseMatch[0], "").trim();
+    medication = medication.replace(/^[\s:;-]+|[\s:;-]+$/g, "").trim();
+    if (!medication || medication.length < 2) medication = undefined;
+    return { medication, dose };
+  };
+
+  const flushBuffer = () => {
+    if (!currentMrn || buffer.length === 0) return;
+    const blockText = normalizeText(buffer.join(" "));
+    if (!blockText) return;
+
+    const gdrDate =
+      extractLabeledDate(blockText, /(?:last\s+gdr|gdr\s+date|gdr\s+attempt|gdr\s+performed)\s*[:\-]?\s*([0-9/\-]+)/i) ||
+      extractFirstDate(blockText);
+
+    if (!gdrDate) {
+      buffer = [];
+      return;
+    }
+
+    const statusDate =
+      extractLabeledDate(blockText, /(?:status\s+date|status\s+as\s+of)\s*[:\-]?\s*([0-9/\-]+)/i) ||
+      gdrDate;
+
+    const lastPsychEval = extractLabeledDate(
+      blockText,
+      /(?:last\s+psych\s+eval|psych\s+eval(?:uation)?|psychiatric\s+eval)\s*[:\-]?\s*([0-9/\-]+)/i
+    );
+
+    const status = extractStatus(blockText);
+    const { medication, dose } = extractMedicationAndDose(blockText);
+
+    results.push({
+      mrn: currentMrn,
+      event: {
+        date: gdrDate,
+        status,
+        statusDate,
+        lastPsychEval,
+        medication,
+        dose
+      }
+    });
+
+    buffer = [];
+  };
+
+  for (const line of lines) {
+    const text = normalizeText(line);
+    if (!text) continue;
+
+    const mrn = extractMrn(text);
+    if (mrn) {
+      flushBuffer();
+      currentMrn = mrn;
+      buffer = [text];
+      continue;
+    }
+
+    if (currentMrn) buffer.push(text);
+  }
+
+  flushBuffer();
+  return results;
 };
 
 const PSYCH_ORDER_REGEX = /\b(psychiatry|psychiatric|psych)\b.*\b(consult|eval|evaluation)\b|\b(consult|eval|evaluation)\b.*\b(psychiatry|psychiatric|psych)\b/i;
