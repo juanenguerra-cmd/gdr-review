@@ -54,10 +54,50 @@ type StoredPayload = {
   settings: AppSettings;
 };
 
+type MapValidationError = {
+  line: number;
+  message: string;
+  content: string;
+};
+
+const KNOWN_INDICATION_CLASSES = Object.keys(DEFAULT_SETTINGS.indicationMap);
+
 const formatIndicationMap = (settings: AppSettings): string => {
   return Object.entries(settings.indicationMap)
     .map(([cls, items]) => `${cls}: ${items.join(', ')}`)
     .join('\n');
+};
+
+const validateIndicationMap = (raw: string): MapValidationError[] => {
+  const errors: MapValidationError[] = [];
+  raw.split(/\r?\n/).forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const separatorIndex = trimmed.indexOf(':');
+    if (separatorIndex === -1) {
+      errors.push({ line: index + 1, message: 'Missing ":" separator.', content: line });
+      return;
+    }
+    const cls = trimmed.slice(0, separatorIndex).trim();
+    const rest = trimmed.slice(separatorIndex + 1).trim();
+    if (!cls) {
+      errors.push({ line: index + 1, message: 'Missing class name before ":".', content: line });
+      return;
+    }
+    if (!rest) {
+      errors.push({ line: index + 1, message: 'Provide at least one indication after ":".', content: line });
+      return;
+    }
+    const values = rest.split(',').map((value) => value.trim()).filter(Boolean);
+    if (values.length === 0) {
+      errors.push({ line: index + 1, message: 'Provide at least one indication after ":".', content: line });
+      return;
+    }
+    if (!KNOWN_INDICATION_CLASSES.includes(cls)) {
+      errors.push({ line: index + 1, message: `Unknown class "${cls}".`, content: line });
+    }
+  });
+  return errors;
 };
 
 const parseIndicationMap = (raw: string, fallback: AppSettings): AppSettings['indicationMap'] => {
@@ -80,6 +120,29 @@ const formatCustomMedMap = (settings: AppSettings): string => {
   return Object.entries(settings.customMedicationMap)
     .map(([drug, cls]) => `${drug} = ${cls}`)
     .join('\n');
+};
+
+const validateCustomMedMap = (raw: string): MapValidationError[] => {
+  const errors: MapValidationError[] = [];
+  raw.split(/\r?\n/).forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex === -1) {
+      errors.push({ line: index + 1, message: 'Missing "=" separator.', content: line });
+      return;
+    }
+    const drug = trimmed.slice(0, separatorIndex).trim();
+    const cls = trimmed.slice(separatorIndex + 1).trim();
+    if (!drug) {
+      errors.push({ line: index + 1, message: 'Missing drug name before "=".', content: line });
+      return;
+    }
+    if (!cls) {
+      errors.push({ line: index + 1, message: 'Missing class name after "=".', content: line });
+    }
+  });
+  return errors;
 };
 
 const parseCustomMedMap = (raw: string, fallback: AppSettings): AppSettings['customMedicationMap'] => {
@@ -117,6 +180,8 @@ function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [indicationMapText, setIndicationMapText] = useState(() => formatIndicationMap(DEFAULT_SETTINGS));
   const [customMedMapText, setCustomMedMapText] = useState(() => formatCustomMedMap(DEFAULT_SETTINGS));
+  const [indicationMapErrors, setIndicationMapErrors] = useState<MapValidationError[]>(() => validateIndicationMap(formatIndicationMap(DEFAULT_SETTINGS)));
+  const [customMedMapErrors, setCustomMedMapErrors] = useState<MapValidationError[]>(() => validateCustomMedMap(formatCustomMedMap(DEFAULT_SETTINGS)));
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [selectedMrns, setSelectedMrns] = useState<string[]>([]);
 
@@ -169,8 +234,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    setIndicationMapText(formatIndicationMap(settings));
-    setCustomMedMapText(formatCustomMedMap(settings));
+    const nextIndicationText = formatIndicationMap(settings);
+    const nextCustomMedText = formatCustomMedMap(settings);
+    setIndicationMapText(nextIndicationText);
+    setCustomMedMapText(nextCustomMedText);
+    setIndicationMapErrors(validateIndicationMap(nextIndicationText));
+    setCustomMedMapErrors(validateCustomMedMap(nextCustomMedText));
   }, [settings]);
 
   const addGlobalLog = useCallback((action: string) => {
@@ -684,11 +753,27 @@ function App() {
           settings={settings}
           indicationMapText={indicationMapText}
           customMedMapText={customMedMapText}
+          indicationMapErrors={indicationMapErrors}
+          customMedMapErrors={customMedMapErrors}
           onSettingsChange={handleSettingsChange}
-          onIndicationMapTextChange={setIndicationMapText}
-          onCustomMedMapTextChange={setCustomMedMapText}
-          onIndicationMapBlur={() => handleSettingsChange({ indicationMap: parseIndicationMap(indicationMapText, settings) })}
-          onCustomMedMapBlur={() => handleSettingsChange({ customMedicationMap: parseCustomMedMap(customMedMapText, settings) })}
+          onIndicationMapTextChange={(value) => {
+            setIndicationMapText(value);
+            setIndicationMapErrors(validateIndicationMap(value));
+          }}
+          onCustomMedMapTextChange={(value) => {
+            setCustomMedMapText(value);
+            setCustomMedMapErrors(validateCustomMedMap(value));
+          }}
+          onIndicationMapBlur={() => {
+            if (indicationMapErrors.length === 0) {
+              handleSettingsChange({ indicationMap: parseIndicationMap(indicationMapText, settings) });
+            }
+          }}
+          onCustomMedMapBlur={() => {
+            if (customMedMapErrors.length === 0) {
+              handleSettingsChange({ customMedicationMap: parseCustomMedMap(customMedMapText, settings) });
+            }
+          }}
         />
       )}
       {showReport && <DeficiencyReport residents={filteredNonCompliantResidents} month={selectedMonth} onClose={() => setShowReport(false)} />}
