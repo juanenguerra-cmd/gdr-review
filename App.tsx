@@ -190,60 +190,7 @@ function App() {
   const hasHydrated = useRef(false);
   const cloudSyncRef = useRef<number | null>(null);
   const cloudSyncInFlight = useRef(false);
-  const scaleStateRef = useRef({ scale: 1 });
   const [isMobileDevice, setIsMobileDevice] = useState(false);
-
-  useEffect(() => {
-    const element = appRef.current;
-    if (!element) return undefined;
-
-    const previousBodyOverflow = document.body.style.overflow;
-    const previousHtmlOverflow = document.documentElement.style.overflow;
-    let frameId: number | null = null;
-
-    const applyScale = () => {
-      if (frameId !== null) {
-        cancelAnimationFrame(frameId);
-      }
-      frameId = requestAnimationFrame(() => {
-        const { innerWidth, innerHeight } = window;
-        const contentWidth = element.scrollWidth;
-        const contentHeight = element.scrollHeight;
-        if (!contentWidth || !contentHeight) return;
-
-        const scale = Math.min(1, innerWidth / contentWidth, innerHeight / contentHeight);
-        const previousScaleState = scaleStateRef.current;
-        const scaleDelta = Math.abs(previousScaleState.scale - scale);
-
-        if (scaleDelta < 0.001) {
-          return;
-        }
-
-        element.style.transform = `scale(${scale})`;
-        element.style.transformOrigin = 'top left';
-        document.body.style.overflow = 'hidden';
-        document.documentElement.style.overflow = 'hidden';
-        scaleStateRef.current = { scale };
-      });
-    };
-
-    applyScale();
-    const resizeObserver = new ResizeObserver(() => applyScale());
-    resizeObserver.observe(element);
-    window.addEventListener('resize', applyScale);
-
-    return () => {
-      if (frameId !== null) {
-        cancelAnimationFrame(frameId);
-      }
-      resizeObserver.disconnect();
-      window.removeEventListener('resize', applyScale);
-      document.body.style.overflow = previousBodyOverflow;
-      document.documentElement.style.overflow = previousHtmlOverflow;
-      element.style.transform = '';
-      element.style.transformOrigin = '';
-    };
-  }, []);
 
   useEffect(() => {
     const nextIndicationText = formatIndicationMap(settings);
@@ -915,7 +862,7 @@ function App() {
   };
 
   return (
-    <div ref={appRef} className="min-h-screen pb-12 print:bg-white print:pb-0">
+    <div ref={appRef} className="min-h-screen w-full overflow-x-hidden pb-12 print:bg-white print:pb-0">
       <PrintStyles />
       <LockScreen isLocked={isLocked} onUnlock={() => setIsLocked(false)} />
       <input type="file" ref={fileInputRef} onChange={handleImportFile} accept=".json" className="hidden" />
