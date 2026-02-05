@@ -7,6 +7,8 @@ interface Props {
   settings: AppSettings;
   indicationMapText: string;
   customMedMapText: string;
+  indicationMapErrors: { line: number; message: string; content: string }[];
+  customMedMapErrors: { line: number; message: string; content: string }[];
   onSettingsChange: (updates: Partial<AppSettings>) => void;
   onIndicationMapTextChange: (value: string) => void;
   onCustomMedMapTextChange: (value: string) => void;
@@ -20,6 +22,8 @@ export const SettingsModal: React.FC<Props> = ({
   settings,
   indicationMapText,
   customMedMapText,
+  indicationMapErrors,
+  customMedMapErrors,
   onSettingsChange,
   onIndicationMapTextChange,
   onCustomMedMapTextChange,
@@ -97,6 +101,18 @@ export const SettingsModal: React.FC<Props> = ({
                 placeholder="Class: indication1, indication2"
               />
               <p className="text-[11px] text-slate-400">Format: Class: indication1, indication2</p>
+              {indicationMapErrors.length > 0 && (
+                <div className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-700 space-y-1">
+                  <div className="font-semibold uppercase">Line errors</div>
+                  <ul className="list-disc list-inside space-y-1">
+                    {indicationMapErrors.map((error) => (
+                      <li key={`indication-${error.line}-${error.content}`}>
+                        Line {error.line}: {error.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
             <div className="space-y-3">
               <label className="block text-xs font-bold text-slate-500 uppercase">Custom medication classification</label>
@@ -108,6 +124,18 @@ export const SettingsModal: React.FC<Props> = ({
                 placeholder="drug name = Class"
               />
               <p className="text-[11px] text-slate-400">Format: drug name = Class (matches normalized names)</p>
+              {customMedMapErrors.length > 0 && (
+                <div className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-700 space-y-1">
+                  <div className="font-semibold uppercase">Line errors</div>
+                  <ul className="list-disc list-inside space-y-1">
+                    {customMedMapErrors.map((error) => (
+                      <li key={`custom-${error.line}-${error.content}`}>
+                        Line {error.line}: {error.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
         </div>
