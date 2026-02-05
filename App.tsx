@@ -170,7 +170,6 @@ const normalizeMedicationClass = (value?: string): string => {
 };
 
 function App() {
-  const appRef = useRef<HTMLDivElement>(null);
   const [reviews, setReviews] = useState<Record<string, Record<string, ResidentData>>>({});
   const [selectedMonth, setSelectedMonth] = useState<string>(new Date().toISOString().slice(0, 7));
   const [selectedMrn, setSelectedMrn] = useState<string | null>(null);
@@ -197,61 +196,8 @@ function App() {
   const [isParsing, setIsParsing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasHydrated = useRef(false);
-  const scaleStateRef = useRef({ scale: 1 });
   const parserWorkerRef = useRef<Worker | null>(null);
   const settingsRef = useRef(settings);
-
-  useEffect(() => {
-    const element = appRef.current;
-    if (!element) return undefined;
-
-    const previousBodyOverflow = document.body.style.overflow;
-    const previousHtmlOverflow = document.documentElement.style.overflow;
-    let frameId: number | null = null;
-
-    const applyScale = () => {
-      if (frameId !== null) {
-        cancelAnimationFrame(frameId);
-      }
-      frameId = requestAnimationFrame(() => {
-        const { innerWidth, innerHeight } = window;
-        const contentWidth = element.scrollWidth;
-        const contentHeight = element.scrollHeight;
-        if (!contentWidth || !contentHeight) return;
-
-        const scale = Math.min(1, innerWidth / contentWidth, innerHeight / contentHeight);
-        const previousScaleState = scaleStateRef.current;
-        const scaleDelta = Math.abs(previousScaleState.scale - scale);
-
-        if (scaleDelta < 0.001) {
-          return;
-        }
-
-        element.style.transform = `scale(${scale})`;
-        element.style.transformOrigin = 'top left';
-        document.body.style.overflow = 'hidden';
-        document.documentElement.style.overflow = 'hidden';
-        scaleStateRef.current = { scale };
-      });
-    };
-
-    applyScale();
-    const resizeObserver = new ResizeObserver(() => applyScale());
-    resizeObserver.observe(element);
-    window.addEventListener('resize', applyScale);
-
-    return () => {
-      if (frameId !== null) {
-        cancelAnimationFrame(frameId);
-      }
-      resizeObserver.disconnect();
-      window.removeEventListener('resize', applyScale);
-      document.body.style.overflow = previousBodyOverflow;
-      document.documentElement.style.overflow = previousHtmlOverflow;
-      element.style.transform = '';
-      element.style.transformOrigin = '';
-    };
-  }, []);
 
   useEffect(() => {
     const nextIndicationText = formatIndicationMap(settings);
@@ -847,7 +793,7 @@ function App() {
   };
 
   return (
-    <div ref={appRef} className="min-h-screen pb-12 print:bg-white print:pb-0">
+    <div className="min-h-screen pb-12 print:bg-white print:pb-0">
       <PrintStyles />
       <LockScreen isLocked={isLocked} onUnlock={() => setIsLocked(false)} />
       <input type="file" ref={fileInputRef} onChange={handleImportFile} accept=".json" className="hidden" />
@@ -896,7 +842,7 @@ function App() {
       )}
 
       <header className="bg-gradient-to-r from-primary to-secondary text-white shadow-lg sticky top-0 z-30 no-print">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="w-full max-w-screen-2xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
              <div className="bg-white/10 p-2 rounded-lg"><Activity className="w-6 h-6 text-white" /></div>
              <div>
@@ -918,13 +864,13 @@ function App() {
           </div>
         </div>
         {lastSavedAt && (
-          <div className="max-w-7xl mx-auto px-4 pb-2 flex justify-end text-[11px] text-blue-100 opacity-80">
+          <div className="w-full max-w-screen-2xl mx-auto px-6 pb-2 flex justify-end text-[11px] text-blue-100 opacity-80">
             Auto-saved {new Date(lastSavedAt).toLocaleString()}
           </div>
         )}
       </header>
 
-      <main id="main-content" className="max-w-7xl mx-auto px-4 py-8 print:p-0 print:mx-0">
+      <main id="main-content" className="w-full max-w-screen-2xl mx-auto px-6 py-8 print:p-0 print:mx-0">
         <div className="hidden print:block mb-8 border-b border-black pb-4">
             <h1 className="text-2xl font-bold text-black">Compliance Review Report</h1>
             <p className="text-sm text-gray-600">Review Month: {selectedMonth} | Generated: {new Date().toLocaleString()}</p>
