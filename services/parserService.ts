@@ -578,7 +578,7 @@ export const parseGdr = (_raw: string): { mrn: string; event: GdrEvent }[] => {
     const source = labelMatch ? labelMatch[1] : text;
     const doseMatch = source.match(/(\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|units?|tabs?|tablets?|caps?|capsules?))/i);
     const dose = doseMatch ? doseMatch[1].trim() : undefined;
-    let medication = source;
+    let medication: string | undefined = source;
     if (doseMatch) medication = source.replace(doseMatch[0], "").trim();
     medication = medication.replace(/^[\s:;-]+|[\s:;-]+$/g, "").trim();
     if (!medication || medication.length < 2) medication = undefined;
