@@ -56,6 +56,12 @@ export interface Medication {
   dose: string;
   startDate?: string;
   indication?: string;
+  indicationMatch?: {
+    confidence: number;
+    source: 'clinical-dictionary' | 'indication-map' | 'none';
+    label?: string;
+    entryId?: string;
+  };
 }
 
 export interface ConsultEvent {
