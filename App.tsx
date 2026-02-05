@@ -956,7 +956,7 @@ function App() {
       )}
 
       <header className="bg-gradient-to-r from-primary to-secondary text-white shadow-lg sticky top-0 z-30 no-print">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div className="mx-auto w-full max-w-screen-2xl px-3 sm:px-4 lg:px-6 xl:px-8 2xl:px-12 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div className="flex items-center gap-3">
              <div className="bg-white/10 p-2 rounded-lg"><Activity className="w-6 h-6 text-white" /></div>
              <div>
@@ -981,14 +981,14 @@ function App() {
           </div>
         </div>
         {(lastSavedAt || lastCloudSavedAt) && (
-          <div className="max-w-7xl mx-auto px-4 pb-2 flex flex-wrap justify-end gap-x-3 text-[11px] text-blue-100 opacity-80">
+          <div className="mx-auto w-full max-w-screen-2xl px-3 sm:px-4 lg:px-6 xl:px-8 2xl:px-12 pb-2 flex flex-wrap justify-end gap-x-3 text-[11px] text-blue-100 opacity-80">
             {lastSavedAt && <span>Auto-saved {new Date(lastSavedAt).toLocaleString()}</span>}
             {lastCloudSavedAt && <span>OneDrive backup {new Date(lastCloudSavedAt).toLocaleString()}</span>}
           </div>
         )}
       </header>
 
-      <main id="main-content" className="max-w-7xl mx-auto px-4 py-8 print:p-0 print:mx-0">
+      <main id="main-content" className="mx-auto w-full max-w-screen-2xl px-3 sm:px-4 lg:px-6 xl:px-8 2xl:px-12 py-8 print:p-0 print:mx-0">
         <div className="hidden print:block mb-8 border-b border-black pb-4">
             <h1 className="text-2xl font-bold text-black">Compliance Review Report</h1>
             <p className="text-sm text-gray-600">Review Month: {selectedMonth} | Generated: {new Date().toLocaleString()}</p>
