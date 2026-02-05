@@ -288,7 +288,7 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
 
             <div className="flex border-b border-slate-200 no-print-in-modal">
                 <button onClick={() => setActiveTab('overview')} className={`px-6 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${activeTab === 'overview' ? 'border-primary text-primary' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><LayoutDashboard className="w-4 h-4" /> Overview</button>
-                <button onClick={() => setActiveTab('history')} className={`px-6 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${activeTab === 'history' ? 'border-primary text-primary' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><History className="w-4 h-4" /> History & Logs</button>
+                <button onClick={() => setActiveTab('history')} className={`px-6 py-3 font-medium text-sm flex items-center gap-2 border-b-2 transition-colors ${activeTab === 'history' ? 'border-primary text-primary' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><History className="w-4 h-4" /> History</button>
             </div>
             
             <div className={`${activeTab === 'overview' ? 'space-y-4' : 'hidden'} print:block print:space-y-4`}>
@@ -601,19 +601,6 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
                       </div>
                   </div>
 
-                  {/* Audit Logs */}
-                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden print:shadow-none print:border-black print:break-inside-avoid">
-                      <div className="bg-slate-50 p-4 border-b border-slate-200 font-bold text-slate-700 flex items-center gap-2 print:bg-gray-100 print:border-black print:text-black"><FileText className="w-4 h-4 text-slate-500 print:text-black"/> Audit Log & Activity</div>
-                      <div className="p-0">
-                          {(!resident.logs || resident.logs.length === 0) ? <div className="p-4 text-center text-slate-400 text-sm print:text-black">No recorded history.</div> : 
-                          <table className="w-full text-left text-sm">
-                              <thead className="bg-slate-50 text-xs uppercase text-slate-500 print:bg-white print:text-black print:border-b print:border-black"><tr><th className="px-4 py-2 print:px-2">Time</th><th className="px-4 py-2 print:px-2">Action</th></tr></thead>
-                              <tbody className="divide-y divide-slate-100 print:divide-black">
-                                  {resident.logs.map((log, i) => (<tr key={i} className="hover:bg-slate-50 print:hover:bg-transparent"><td className="px-4 py-2 text-xs text-slate-500 w-48 print:text-black print:px-2">{log.timestamp}</td><td className={`px-4 py-2 print:px-2 print:text-black ${log.type === 'alert' ? 'text-red-600 font-medium' : (log.type === 'update' ? 'text-blue-600' : 'text-slate-700')}`}>{log.message}</td></tr>))}
-                              </tbody>
-                          </table>}
-                      </div>
-                  </div>
               </div>
             </div>
           </div>
