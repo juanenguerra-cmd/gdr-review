@@ -1,13 +1,26 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { ResidentData, ComplianceStatus } from '../types';
 import { AlertCircle, CheckCircle, Clock, ChevronRight, XCircle } from 'lucide-react';
 
 interface Props {
   residents: ResidentData[];
   onSelect: (resident: ResidentData) => void;
+  selectedMrns: string[];
+  onToggleSelect: (mrn: string) => void;
+  onToggleAll: () => void;
+  allSelected: boolean;
+  someSelected: boolean;
 }
 
-export const ResidentList: React.FC<Props> = ({ residents, onSelect }) => {
+export const ResidentList: React.FC<Props> = ({ residents, onSelect, selectedMrns, onToggleSelect, onToggleAll, allSelected, someSelected }) => {
+  const selectAllRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someSelected && !allSelected;
+    }
+  }, [someSelected, allSelected]);
+
   const getStatusBadge = (status: ComplianceStatus) => {
     switch (status) {
       case ComplianceStatus.COMPLIANT:
@@ -39,6 +52,16 @@ export const ResidentList: React.FC<Props> = ({ residents, onSelect }) => {
         <table className="w-full text-left border-collapse print:text-sm">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-xs uppercase tracking-wider text-slate-500 font-bold print:bg-gray-100 print:text-black print:border-black">
+              <th className="p-4 print:hidden">
+                <input
+                  ref={selectAllRef}
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={onToggleAll}
+                  className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary/50"
+                  aria-label="Select all residents"
+                />
+              </th>
               <th className="p-4 print:p-2">Resident</th>
               <th className="p-4 print:p-2">Location</th>
               <th className="p-4 print:p-2">Meds Parsed</th>
@@ -51,7 +74,7 @@ export const ResidentList: React.FC<Props> = ({ residents, onSelect }) => {
           <tbody className="divide-y divide-slate-100 print:divide-black">
             {residents.length === 0 ? (
               <tr>
-                <td colSpan={7} className="p-8 text-center text-slate-400 text-sm print:text-black">No residents found matching filters.</td>
+                <td colSpan={8} className="p-8 text-center text-slate-400 text-sm print:text-black">No residents found matching filters.</td>
               </tr>
             ) : (
               residents.map((r) => (
@@ -60,6 +83,16 @@ export const ResidentList: React.FC<Props> = ({ residents, onSelect }) => {
                   onClick={() => onSelect(r)}
                   className="hover:bg-slate-50 transition-colors cursor-pointer group print:break-inside-avoid print:cursor-default print:hover:bg-transparent"
                 >
+                  <td className="p-4 print:hidden">
+                    <input
+                      type="checkbox"
+                      checked={selectedMrns.includes(r.mrn)}
+                      onChange={() => onToggleSelect(r.mrn)}
+                      onClick={(event) => event.stopPropagation()}
+                      className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary/50"
+                      aria-label={`Select ${r.name}`}
+                    />
+                  </td>
                   <td className="p-4 print:p-2">
                     <div className="font-bold text-primary group-hover:underline print:text-black print:group-hover:no-underline">{r.name}</div>
                     <div className="text-xs text-slate-400 print:text-black">MRN: {r.mrn}</div>

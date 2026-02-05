@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud } from 'lucide-react';
+import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud, CheckCircle } from 'lucide-react';
 import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData } from './types';
 import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors } from './services/parserService';
 import { evaluateResidentCompliance } from './services/complianceService';
@@ -118,6 +118,7 @@ function App() {
   const [indicationMapText, setIndicationMapText] = useState(() => formatIndicationMap(DEFAULT_SETTINGS));
   const [customMedMapText, setCustomMedMapText] = useState(() => formatCustomMedMap(DEFAULT_SETTINGS));
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [selectedMrns, setSelectedMrns] = useState<string[]>([]);
 
 
   const [, setAuditLog] = useState<string[]>([]);
@@ -215,7 +216,10 @@ function App() {
         carePlanPsychPresent: resident.compliance?.carePlanPsychPresent,
         indicationStatus: resident.compliance?.indicationStatus,
         consultStatus: resident.compliance?.consultStatus,
-        manualGdrStatus: resident.compliance?.manualGdrStatus
+        manualGdrStatus: resident.compliance?.manualGdrStatus,
+        explainability: resident.compliance?.explainability || [],
+        reviewComplete: resident.compliance?.reviewComplete || false,
+        reviewCompletedAt: resident.compliance?.reviewCompletedAt
       }
     };
   };
@@ -297,7 +301,7 @@ function App() {
           meds: [], consults: [], behaviors: [], gdr: [], carePlan: [], diagnoses: [],
           psychMdOrders: [], episodicBehaviors: [], manualGdr: createDefaultManualGdr(),
           logs: [createAuditEntry("Partial record created", "info")],
-          compliance: { status: ComplianceStatus.UNKNOWN, issues: [], gdrOverdue: false, missingCarePlan: false, missingConsent: false, manualGdrStatus: 'NOT_SET' }
+          compliance: { status: ComplianceStatus.UNKNOWN, issues: [], gdrOverdue: false, missingCarePlan: false, missingConsent: false, manualGdrStatus: 'NOT_SET', explainability: [], reviewComplete: false }
         };
       }
       if (!currentMonthData[mrn].logs) currentMonthData[mrn].logs = [];
@@ -468,6 +472,16 @@ function App() {
     return filteredResidents.filter(r => r.compliance.status === ComplianceStatus.WARNING || r.compliance.status === ComplianceStatus.CRITICAL);
   }, [filteredResidents]);
 
+  const selectedResidents = useMemo(() => {
+    const selectedSet = new Set(selectedMrns);
+    return filteredResidents.filter(r => selectedSet.has(r.mrn));
+  }, [filteredResidents, selectedMrns]);
+
+  useEffect(() => {
+    const filteredSet = new Set(filteredResidents.map(r => r.mrn));
+    setSelectedMrns(prev => prev.filter(mrn => filteredSet.has(mrn)));
+  }, [filteredResidents]);
+
   const selectedResidentData = selectedMrn && reviews[selectedMonth] ? reviews[selectedMonth][selectedMrn] : null;
 
   const getResidentHistory = useCallback((mrn: string): ReviewHistoryItem[] => {
@@ -559,6 +573,91 @@ function App() {
     link.click();
     URL.revokeObjectURL(url);
   };
+
+  const exportResidentList = (residentsToExport: ResidentData[], label: string) => {
+    if (residentsToExport.length === 0) return;
+    const headers = [
+      'MRN',
+      'Name',
+      'Unit',
+      'Room',
+      'Meds Parsed',
+      'Compliance Status',
+      'Issues',
+      'Review Complete',
+      'Review Completed At'
+    ];
+    const rows = residentsToExport.map(r => [
+      r.mrn,
+      r.name,
+      r.unit,
+      r.room,
+      r.meds.length > 0 ? 'Yes' : 'No',
+      r.compliance.status,
+      r.compliance.issues.join('; '),
+      r.compliance.reviewComplete ? 'Yes' : 'No',
+      r.compliance.reviewCompletedAt || ''
+    ]);
+    const escape = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const csv = [headers, ...rows].map(row => row.map(cell => escape(String(cell ?? ''))).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${label}_${selectedMonth}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportFiltered = () => {
+    exportResidentList(filteredResidents, 'filtered_residents');
+    addGlobalLog(`Exported ${filteredResidents.length} filtered residents.`);
+  };
+
+  const handleExportSelected = () => {
+    exportResidentList(selectedResidents, 'selected_residents');
+    addGlobalLog(`Exported ${selectedResidents.length} selected residents.`);
+  };
+
+  const handleMarkReviewComplete = () => {
+    if (selectedResidents.length === 0) return;
+    const timestamp = new Date().toISOString();
+    setReviews(prev => {
+      const monthData = prev[selectedMonth];
+      if (!monthData) return prev;
+      const updatedMonth = { ...monthData };
+      selectedResidents.forEach(resident => {
+        const existing = updatedMonth[resident.mrn];
+        if (!existing) return;
+        updatedMonth[resident.mrn] = {
+          ...existing,
+          logs: [...existing.logs, createAuditEntry('Review marked complete', 'update')],
+          compliance: {
+            ...existing.compliance,
+            reviewComplete: true,
+            reviewCompletedAt: timestamp
+          }
+        };
+      });
+      return { ...prev, [selectedMonth]: updatedMonth };
+    });
+    addGlobalLog(`Marked ${selectedResidents.length} resident reviews complete.`);
+  };
+
+  const toggleResidentSelection = (mrn: string) => {
+    setSelectedMrns(prev => prev.includes(mrn) ? prev.filter(id => id !== mrn) : [...prev, mrn]);
+  };
+
+  const toggleSelectAll = () => {
+    if (filteredResidents.length === 0) return;
+    if (selectedMrns.length === filteredResidents.length) {
+      setSelectedMrns([]);
+    } else {
+      setSelectedMrns(filteredResidents.map(r => r.mrn));
+    }
+  };
+
+  const clearSelection = () => setSelectedMrns([]);
 
   const updateResident = (mrn: string, updater: (resident: ResidentData) => ResidentData) => {
     setReviews(prev => {
@@ -681,18 +780,62 @@ function App() {
              <Dashboard residents={filteredResidents} />
           </div>
 
-          <div className="flex justify-between items-center no-print">
-            <h2 className="text-xl font-bold text-slate-700">Resident Compliance List ({filteredResidents.length})</h2>
-            <button 
-              onClick={() => setShowReport(true)}
-              disabled={filteredNonCompliantResidents.length === 0}
-              className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg font-bold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <FileWarning className="w-4 h-4"/> View Deficiency Report ({filteredNonCompliantResidents.length})
-            </button>
+          <div className="flex flex-col gap-3 no-print">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-bold text-slate-700">Resident Compliance List ({filteredResidents.length})</h2>
+              <button 
+                onClick={() => setShowReport(true)}
+                disabled={filteredNonCompliantResidents.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg font-bold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <FileWarning className="w-4 h-4"/> View Deficiency Report ({filteredNonCompliantResidents.length})
+              </button>
+            </div>
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 bg-white border border-slate-200 rounded-xl p-3 shadow-sm">
+              <div className="text-sm text-slate-600">
+                <span className="font-semibold text-slate-700">Selected:</span> {selectedMrns.length} of {filteredResidents.length}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={handleExportFiltered}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200"
+                >
+                  <Download className="w-4 h-4" /> Export filtered list
+                </button>
+                <button
+                  onClick={handleExportSelected}
+                  disabled={selectedResidents.length === 0}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-xs font-bold hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Download className="w-4 h-4" /> Export selected
+                </button>
+                <button
+                  onClick={handleMarkReviewComplete}
+                  disabled={selectedResidents.length === 0}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 text-green-700 text-xs font-bold hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <CheckCircle className="w-4 h-4" /> Mark review complete
+                </button>
+                <button
+                  onClick={clearSelection}
+                  disabled={selectedResidents.length === 0}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 text-slate-600 text-xs font-bold hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <X className="w-4 h-4" /> Clear selection
+                </button>
+              </div>
+            </div>
           </div>
 
-          <ResidentList residents={filteredResidents} onSelect={(r) => setSelectedMrn(r.mrn)} />
+          <ResidentList
+            residents={filteredResidents}
+            onSelect={(r) => setSelectedMrn(r.mrn)}
+            selectedMrns={selectedMrns}
+            onToggleSelect={toggleResidentSelection}
+            onToggleAll={toggleSelectAll}
+            allSelected={filteredResidents.length > 0 && selectedMrns.length === filteredResidents.length}
+            someSelected={selectedMrns.length > 0 && selectedMrns.length < filteredResidents.length}
+          />
         </div>
       </main>
     </div>

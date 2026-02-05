@@ -122,6 +122,19 @@ export interface ManualGdrData {
   updatedBy?: string;
 }
 
+export interface ComplianceRuleEvidence {
+  label: string;
+  value: string;
+}
+
+export interface ComplianceExplainabilityEntry {
+  id: string;
+  title: string;
+  severity: 'CRITICAL' | 'WARNING';
+  message: string;
+  evidence: ComplianceRuleEvidence[];
+}
+
 export interface AppSettings {
   consultRecencyDays: number;
   behaviorThreshold: number;
@@ -156,6 +169,9 @@ export interface ResidentData extends Resident {
     indicationStatus?: 'OK' | 'MISSING' | 'MISMATCH' | 'NEEDS_REVIEW';
     consultStatus?: 'CONSULT' | 'ORDER' | 'MISSING';
     manualGdrStatus?: ManualGdrStatus;
+    explainability?: ComplianceExplainabilityEntry[];
+    reviewComplete?: boolean;
+    reviewCompletedAt?: string;
   };
 }
 

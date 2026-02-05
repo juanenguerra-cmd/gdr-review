@@ -148,6 +148,14 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
     !medicationWarnings.includes(issue)
   );
 
+  const explainabilityEntries = resident.compliance.explainability || [];
+
+  const getSeverityBadge = (severity: 'CRITICAL' | 'WARNING') => (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${severity === 'CRITICAL' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'} print:bg-transparent print:text-black print:border print:border-black`}>
+      {severity === 'CRITICAL' ? 'Critical' : 'Warning'}
+    </span>
+  );
+
   const handleDownload = () => {
     const contentElement = document.getElementById('resident-profile-modal');
     if (!contentElement) return;
@@ -311,6 +319,38 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
                         </ul>
                     </div>
                 )}
+
+                <div className="border rounded-xl p-6 bg-white border-slate-200 shadow-sm print:shadow-none print:border-black print:p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-bold flex items-center gap-2 text-slate-800 print:text-black"><FileText className="w-5 h-5 text-primary" /> Explainability (Why)</h3>
+                    <span className="text-xs text-slate-500">{explainabilityEntries.length} rule{explainabilityEntries.length === 1 ? '' : 's'} fired</span>
+                  </div>
+                  {explainabilityEntries.length === 0 ? (
+                    <p className="text-sm text-slate-500">No compliance issues to explain.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {explainabilityEntries.map((entry) => (
+                        <div key={entry.id} className="border border-slate-200 rounded-lg p-4 bg-slate-50 print:bg-transparent print:border-black">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="font-semibold text-slate-700">{entry.title}</div>
+                            {getSeverityBadge(entry.severity)}
+                          </div>
+                          <div className="text-sm text-slate-600 mt-1">{entry.message}</div>
+                          {entry.evidence.length > 0 && (
+                            <dl className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-2 text-xs text-slate-500">
+                              {entry.evidence.map((item, idx) => (
+                                <div key={`${entry.id}-${idx}`}>
+                                  <dt className="uppercase font-bold text-slate-400">{item.label}</dt>
+                                  <dd className="text-slate-700">{item.value}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
             </div>
             
             {/* Overview Section */}
@@ -360,6 +400,12 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
                   <div>
                     <div className="text-xs uppercase font-bold text-slate-400">Manual GDR</div>
                     <div className="font-semibold text-slate-700">{resident.meds.length > 0 ? resident.manualGdr.status.replace('_', ' ') : 'N/A'}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase font-bold text-slate-400">Review Complete</div>
+                    <div className="font-semibold text-slate-700">
+                      {resident.compliance.reviewComplete ? `Yes (${resident.compliance.reviewCompletedAt ? new Date(resident.compliance.reviewCompletedAt).toLocaleString() : 'timestamp unavailable'})` : 'No'}
+                    </div>
                   </div>
                   <div>
                     <div className="text-xs uppercase font-bold text-slate-400">Psych Consult Status</div>
