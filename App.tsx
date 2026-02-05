@@ -317,6 +317,14 @@ function App() {
     };
   };
 
+  const recalculateCompliance = useCallback((monthData: Record<string, ResidentData>, month: string, settingsToUse: AppSettings) => {
+    const [y, m] = month.split('-').map(Number);
+    const lastDay = new Date(y, m, 0);
+    Object.keys(monthData).forEach(mrn => {
+      monthData[mrn] = evaluateResidentCompliance(monthData[mrn], lastDay, settingsToUse);
+    });
+  }, []);
+
   const hydrateFromPayload = useCallback((payload: StoredPayload) => {
     const nextSettings = normalizeSettings(payload.settings || {});
     const normalizedReviews: Record<string, Record<string, ResidentData>> = {};
@@ -374,14 +382,6 @@ function App() {
     }, 500);
     return () => window.clearTimeout(timeout);
   }, [reviews, settings]);
-
-  const recalculateCompliance = useCallback((monthData: Record<string, ResidentData>, month: string, settingsToUse: AppSettings) => {
-    const [y, m] = month.split('-').map(Number);
-    const lastDay = new Date(y, m, 0);
-    Object.keys(monthData).forEach(mrn => {
-      monthData[mrn] = evaluateResidentCompliance(monthData[mrn], lastDay, settingsToUse);
-    });
-  }, []);
 
   const handleParse = useCallback((type: ParseType, rawText: string, targetMonth: string) => {
     const currentMonthData = { ...(reviews[targetMonth] || {}) };

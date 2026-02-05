@@ -1,6 +1,6 @@
 import { ResidentData, ComplianceStatus, Medication, AppSettings, MedicationClass, ComplianceExplainabilityEntry, ComplianceRuleEvidence } from '../types';
 import { normalizeSettings } from './settingsService';
-import { normalizeText, resolveIndicationMatch } from './clinicalIndicationService';
+import { resolveIndicationMatch } from './clinicalIndicationService';
 
 const isWithinDays = (dateStr: string, now: Date, days: number): boolean => {
   const date = new Date(dateStr);
