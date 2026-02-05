@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud, CheckCircle } from 'lucide-react';
+import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud, CheckCircle, FileText } from 'lucide-react';
 import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData, StoredPayload } from './types';
-import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors } from './services/parserService';
+import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors, setDateParseWarningHandler } from './services/parserService';
 import { evaluateResidentCompliance } from './services/complianceService';
 import { DEFAULT_SETTINGS, normalizeSettings } from './services/settingsService';
 import { loadAutosave, saveAutosave, uploadToOneDrive } from './services/storageService';
@@ -179,15 +179,17 @@ function App() {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [lastCloudSavedAt, setLastCloudSavedAt] = useState<string | null>(null);
   const [selectedMrns, setSelectedMrns] = useState<string[]>([]);
-
-
-  const [, setAuditLog] = useState<string[]>([]);
+  const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
+  const [auditFilterText, setAuditFilterText] = useState('');
+  const [auditFilterType, setAuditFilterType] = useState<'ALL' | AuditEntry['type']>('ALL');
   const [, setShowComplianceModal] = useState(false);
   const [filterText, setFilterText] = useState("");
   const [unitFilter, setUnitFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [psychOnly, setPsychOnly] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const parserWorkerRef = useRef<Worker | null>(null);
+  const parserRequestIdRef = useRef(0);
   const hasHydrated = useRef(false);
   const cloudSyncRef = useRef<number | null>(null);
   const cloudSyncInFlight = useRef(false);
@@ -254,16 +256,16 @@ function App() {
     setCustomMedMapErrors(validateCustomMedMap(nextCustomMedText));
   }, [settings]);
 
-  const addGlobalLog = useCallback((action: string) => {
-    const timestamp = new Date().toLocaleTimeString();
-    setAuditLog((prev: string[]) => [`[${timestamp}] ${action}`, ...prev]);
-  }, []);
-
-  const createAuditEntry = (message: string, type: AuditEntry['type'] = 'info'): AuditEntry => ({
+  const createAuditEntry = useCallback((message: string, type: AuditEntry['type'] = 'info'): AuditEntry => ({
     timestamp: new Date().toLocaleString(),
     message,
     type
-  });
+  }), []);
+
+  const addGlobalLog = useCallback((action: string, type: AuditEntry['type'] = 'info') => {
+    const entry = createAuditEntry(action, type);
+    setAuditLog(prev => [entry, ...prev]);
+  }, [createAuditEntry]);
 
   const normalizeResident = (resident: ResidentData): ResidentData => {
     const normalizedMeds = (resident.meds || []).map((med) => ({
@@ -305,10 +307,18 @@ function App() {
     };
   };
 
-  const recalculateCompliance = useCallback((monthData: Record<string, ResidentData>, month: string, settingsToUse: AppSettings) => {
+  const recalculateCompliance = useCallback((
+    monthData: Record<string, ResidentData>,
+    month: string,
+    settingsToUse: AppSettings,
+    mrns?: string[]
+  ) => {
     const [y, m] = month.split('-').map(Number);
     const lastDay = new Date(y, m, 0);
-    Object.keys(monthData).forEach(mrn => {
+    const targets = mrns === undefined
+      ? Object.keys(monthData)
+      : mrns.filter(mrn => monthData[mrn]);
+    targets.forEach(mrn => {
       monthData[mrn] = evaluateResidentCompliance(monthData[mrn], lastDay, settingsToUse);
     });
   }, []);
@@ -416,144 +426,229 @@ function App() {
     return () => window.clearTimeout(timeout);
   }, [reviews, settings, addGlobalLog]);
 
-  const handleParse = useCallback((type: ParseType, rawText: string, targetMonth: string) => {
-    const currentMonthData = { ...(reviews[targetMonth] || {}) };
+  const applyParsedResults = useCallback((
+    type: ParseType,
+    parsed: unknown,
+    targetMonth: string,
+    warnings: string[] = []
+  ) => {
+    const affectedMrns = new Set<string>();
     let count = 0;
 
-    const ensureResident = (mrn: string) => {
-      if (!currentMonthData[mrn]) {
-        currentMonthData[mrn] = {
-          mrn, name: 'Unknown', room: '', unit: '',
-          meds: [], consults: [], behaviors: [], gdr: [], carePlan: [], diagnoses: [],
-          psychMdOrders: [], episodicBehaviors: [], manualGdr: createDefaultManualGdr(),
-          logs: [createAuditEntry("Partial record created", "info")],
-          compliance: { status: ComplianceStatus.UNKNOWN, issues: [], gdrOverdue: false, missingCarePlan: false, missingConsent: false, manualGdrStatus: 'NOT_SET', explainability: [], reviewComplete: false }
-        };
+    setReviews(prev => {
+      const currentMonthData = { ...(prev[targetMonth] || {}) };
+
+      const ensureResident = (mrn: string) => {
+        if (!currentMonthData[mrn]) {
+          currentMonthData[mrn] = {
+            mrn, name: 'Unknown', room: '', unit: '',
+            meds: [], consults: [], behaviors: [], gdr: [], carePlan: [], diagnoses: [],
+            psychMdOrders: [], episodicBehaviors: [], manualGdr: createDefaultManualGdr(),
+            logs: [createAuditEntry("Partial record created", "info")],
+            compliance: { status: ComplianceStatus.UNKNOWN, issues: [], gdrOverdue: false, missingCarePlan: false, missingConsent: false, manualGdrStatus: 'NOT_SET', explainability: [], reviewComplete: false }
+          };
+        }
+        if (!currentMonthData[mrn].logs) currentMonthData[mrn].logs = [];
+        if (!currentMonthData[mrn].diagnoses) currentMonthData[mrn].diagnoses = [];
+        if (!currentMonthData[mrn].behaviors) currentMonthData[mrn].behaviors = [];
+        if (!currentMonthData[mrn].gdr) currentMonthData[mrn].gdr = [];
+        if (!currentMonthData[mrn].carePlan) currentMonthData[mrn].carePlan = [];
+        if (!currentMonthData[mrn].consults) currentMonthData[mrn].consults = [];
+        if (!currentMonthData[mrn].psychMdOrders) currentMonthData[mrn].psychMdOrders = [];
+        if (!currentMonthData[mrn].episodicBehaviors) currentMonthData[mrn].episodicBehaviors = [];
+        if (!currentMonthData[mrn].manualGdr) currentMonthData[mrn].manualGdr = createDefaultManualGdr();
+      };
+
+      switch (type) {
+        case ParseType.CENSUS: {
+          const parsedCensus = parsed as ReturnType<typeof parseCensus>;
+          parsedCensus.forEach(p => {
+            ensureResident(p.mrn);
+            currentMonthData[p.mrn] = { ...currentMonthData[p.mrn], ...p, logs: currentMonthData[p.mrn].logs };
+            affectedMrns.add(p.mrn);
+          });
+          count = parsedCensus.length;
+          break;
+        }
+        case ParseType.MEDS: {
+          const parsedMeds = parsed as ReturnType<typeof parseMeds>;
+          const medsByMrn = parsedMeds.reduce((acc, med) => {
+            if (!acc[med.mrn]) acc[med.mrn] = [];
+            acc[med.mrn].push(med);
+            return acc;
+          }, {} as Record<string, typeof parsedMeds>);
+
+          Object.entries(medsByMrn).forEach(([mrn, meds]) => {
+            ensureResident(mrn);
+            currentMonthData[mrn].meds = meds;
+
+            const firstAP = meds.filter(m => (m.classOverride || m.class) === 'ANTIPSYCHOTICS/ANTIMANIC AGENTS' && m.startDate)
+              .sort((a, b) => new Date(a.startDate!).getTime() - new Date(b.startDate!).getTime())[0];
+
+            if (firstAP && !currentMonthData[mrn].compliance.firstAntipsychoticDate) {
+              currentMonthData[mrn].compliance.firstAntipsychoticDate = firstAP.startDate;
+              currentMonthData[mrn].logs.push(createAuditEntry(`First antipsychotic date set: ${firstAP.startDate}`, 'update'));
+            }
+            currentMonthData[mrn].logs.push(createAuditEntry(`Medications updated (${meds.length} active)`, 'update'));
+            affectedMrns.add(mrn);
+          });
+          count = parsedMeds.length;
+          break;
+        }
+        case ParseType.BEHAVIORS: {
+          const parsedBehaviors = parsed as ReturnType<typeof parseBehaviors>;
+          parsedBehaviors.forEach(({ mrn, event }) => {
+            ensureResident(mrn);
+            if (!currentMonthData[mrn].behaviors.some(b => b.date === event.date)) {
+              currentMonthData[mrn].behaviors.push(event);
+            }
+            affectedMrns.add(mrn);
+          });
+          count = parsedBehaviors.length;
+          if (count > 0) addGlobalLog(`${count} behavior logs parsed.`);
+          break;
+        }
+        case ParseType.CAREPLAN: {
+          const parsedCP = parsed as ReturnType<typeof parseCarePlans>;
+          parsedCP.forEach(cp => {
+            ensureResident(cp.mrn);
+            if (!currentMonthData[cp.mrn].carePlan.some(i => i.text === cp.item.text)) {
+              currentMonthData[cp.mrn].carePlan.push(cp.item);
+              currentMonthData[cp.mrn].logs.push(createAuditEntry(`Care Plan item added`, 'update'));
+            }
+            affectedMrns.add(cp.mrn);
+          });
+          count = parsedCP.length;
+          break;
+        }
+        case ParseType.CONSULTS: {
+          const parsedConsults = parsed as ReturnType<typeof parseConsults>;
+          parsedConsults.forEach(c => {
+            ensureResident(c.mrn);
+            if (!currentMonthData[c.mrn].consults.some(e => e.date === c.event.date && e.snippet === c.event.snippet)) {
+              currentMonthData[c.mrn].consults.push(c.event);
+              currentMonthData[c.mrn].logs.push(createAuditEntry(`Consult added: ${c.event.date}`, 'update'));
+            }
+            affectedMrns.add(c.mrn);
+          });
+          count = parsedConsults.length;
+          break;
+        }
+        case ParseType.PSYCH_MD_ORDERS: {
+          const parsedOrders = parsed as ReturnType<typeof parsePsychMdOrders>;
+          parsedOrders.forEach(order => {
+            ensureResident(order.mrn);
+            if (!currentMonthData[order.mrn].psychMdOrders.some(o => o.date === order.event.date && o.orderText === order.event.orderText)) {
+              currentMonthData[order.mrn].psychMdOrders.push(order.event);
+              currentMonthData[order.mrn].logs.push(createAuditEntry(`Psych MD order added: ${order.event.date}`, 'update'));
+            }
+            affectedMrns.add(order.mrn);
+          });
+          count = parsedOrders.length;
+          break;
+        }
+        case ParseType.EPISODIC_BEHAVIORS: {
+          const parsedEpisodes = parsed as ReturnType<typeof parseEpisodicBehaviors>;
+          parsedEpisodes.forEach(({ mrn, event }) => {
+            ensureResident(mrn);
+            if (!currentMonthData[mrn].episodicBehaviors.some(b => b.date === event.date && b.snippet === event.snippet)) {
+              currentMonthData[mrn].episodicBehaviors.push(event);
+              currentMonthData[mrn].logs.push(createAuditEntry(`Episodic behavior added: ${event.date}`, 'update'));
+            }
+            affectedMrns.add(mrn);
+          });
+          count = parsedEpisodes.length;
+          break;
+        }
+        case ParseType.GDR: {
+          const parsedGdr = parsed as ReturnType<typeof parseGdr>;
+          parsedGdr.forEach(g => {
+            ensureResident(g.mrn);
+            if (!currentMonthData[g.mrn].gdr.some(e => e.date === g.event.date)) {
+              currentMonthData[g.mrn].gdr.push(g.event);
+              currentMonthData[g.mrn].logs.push(createAuditEntry(`GDR event added: ${g.event.date}`, 'update'));
+            }
+            affectedMrns.add(g.mrn);
+          });
+          count = parsedGdr.length;
+          break;
+        }
       }
-      if (!currentMonthData[mrn].logs) currentMonthData[mrn].logs = [];
-      if (!currentMonthData[mrn].diagnoses) currentMonthData[mrn].diagnoses = [];
-      if (!currentMonthData[mrn].behaviors) currentMonthData[mrn].behaviors = [];
-      if (!currentMonthData[mrn].gdr) currentMonthData[mrn].gdr = [];
-      if (!currentMonthData[mrn].carePlan) currentMonthData[mrn].carePlan = [];
-      if (!currentMonthData[mrn].consults) currentMonthData[mrn].consults = [];
-      if (!currentMonthData[mrn].psychMdOrders) currentMonthData[mrn].psychMdOrders = [];
-      if (!currentMonthData[mrn].episodicBehaviors) currentMonthData[mrn].episodicBehaviors = [];
-      if (!currentMonthData[mrn].manualGdr) currentMonthData[mrn].manualGdr = createDefaultManualGdr();
+
+      recalculateCompliance(currentMonthData, targetMonth, settings, Array.from(affectedMrns));
+      return { ...prev, [targetMonth]: currentMonthData };
+    });
+
+    setSelectedMonth(targetMonth);
+    if (warnings.length > 0) {
+      const sample = warnings.slice(0, 3).join(', ');
+      const suffix = warnings.length > 3 ? ` (+${warnings.length - 3} more)` : '';
+      addGlobalLog(`Date parsing warnings (${warnings.length}) while parsing ${type}. ${sample}${suffix}`, 'alert');
+    }
+    addGlobalLog(`Parsed ${type} for ${targetMonth} - processed ${count} items.`);
+  }, [addGlobalLog, createAuditEntry, recalculateCompliance, settings]);
+
+  useEffect(() => {
+    if (parserWorkerRef.current || typeof Worker === 'undefined') return;
+    const worker = new Worker(new URL('./services/parserWorker.ts', import.meta.url), { type: 'module' });
+    parserWorkerRef.current = worker;
+    worker.onmessage = (event: MessageEvent<{ type: ParseType; targetMonth: string; parsed: unknown; warnings: string[] }>) => {
+      const { type, targetMonth, parsed, warnings } = event.data;
+      applyParsedResults(type, parsed, targetMonth, warnings);
     };
+
+    return () => {
+      worker.terminate();
+      parserWorkerRef.current = null;
+    };
+  }, [applyParsedResults]);
+
+  const handleParse = useCallback((type: ParseType, rawText: string, targetMonth: string) => {
+    if (parserWorkerRef.current) {
+      parserRequestIdRef.current += 1;
+      parserWorkerRef.current.postMessage({
+        requestId: parserRequestIdRef.current,
+        type,
+        rawText,
+        targetMonth,
+        customMedicationMap: settings.customMedicationMap,
+        residents: Object.values(reviews[targetMonth] || {})
+      });
+      addGlobalLog(`Parsing ${type} in background worker...`);
+      return;
+    }
+
+    const warnings: string[] = [];
+    setDateParseWarningHandler((value) => warnings.push(value));
 
     switch (type) {
       case ParseType.CENSUS:
-        const parsedCensus = parseCensus(rawText);
-        parsedCensus.forEach(p => {
-          ensureResident(p.mrn);
-          currentMonthData[p.mrn] = { ...currentMonthData[p.mrn], ...p, logs: currentMonthData[p.mrn].logs };
-        });
-        count = parsedCensus.length;
+        applyParsedResults(type, parseCensus(rawText), targetMonth, warnings);
         break;
-      
       case ParseType.MEDS:
-        const parsedMeds = parseMeds(rawText, settings.customMedicationMap);
-        const medsByMrn = parsedMeds.reduce((acc, med) => {
-            if(!acc[med.mrn]) acc[med.mrn] = [];
-            acc[med.mrn].push(med);
-            return acc;
-        }, {} as Record<string, typeof parsedMeds>);
-
-        Object.entries(medsByMrn).forEach(([mrn, meds]) => {
-            ensureResident(mrn);
-            currentMonthData[mrn].meds = meds;
-            
-            const firstAP = meds.filter(m => (m.classOverride || m.class) === 'ANTIPSYCHOTICS/ANTIMANIC AGENTS' && m.startDate)
-                                .sort((a, b) => new Date(a.startDate!).getTime() - new Date(b.startDate!).getTime())[0];
-            
-            if (firstAP && !currentMonthData[mrn].compliance.firstAntipsychoticDate) {
-                currentMonthData[mrn].compliance.firstAntipsychoticDate = firstAP.startDate;
-                currentMonthData[mrn].logs.push(createAuditEntry(`First antipsychotic date set: ${firstAP.startDate}`, 'update'));
-            }
-            currentMonthData[mrn].logs.push(createAuditEntry(`Medications updated (${meds.length} active)`, 'update'));
-        });
-        count = parsedMeds.length;
+        applyParsedResults(type, parseMeds(rawText, settings.customMedicationMap), targetMonth, warnings);
         break;
-
-      case ParseType.BEHAVIORS:
-        const parsedBehaviors = parseBehaviors(rawText);
-        parsedBehaviors.forEach(({mrn, event}) => {
-            ensureResident(mrn);
-             if (!currentMonthData[mrn].behaviors.some(b => b.date === event.date)) {
-                currentMonthData[mrn].behaviors.push(event);
-            }
-        });
-        count = parsedBehaviors.length;
-        if(count > 0) addGlobalLog(`${count} behavior logs parsed.`);
-        break;
-
-       case ParseType.CAREPLAN:
-           const parsedCP = parseCarePlans(rawText);
-           parsedCP.forEach(cp => {
-               ensureResident(cp.mrn);
-               if(!currentMonthData[cp.mrn].carePlan.some(i => i.text === cp.item.text)) {
-                   currentMonthData[cp.mrn].carePlan.push(cp.item);
-                   currentMonthData[cp.mrn].logs.push(createAuditEntry(`Care Plan item added`, 'update'));
-               }
-           });
-           count = parsedCP.length;
-           break;
-      
       case ParseType.CONSULTS:
-           const parsedConsults = parseConsults(rawText);
-           parsedConsults.forEach(c => {
-               ensureResident(c.mrn);
-               if(!currentMonthData[c.mrn].consults.some(e => e.date === c.event.date && e.snippet === c.event.snippet)) {
-                   currentMonthData[c.mrn].consults.push(c.event);
-                   currentMonthData[c.mrn].logs.push(createAuditEntry(`Consult added: ${c.event.date}`, 'update'));
-               }
-           });
-           count = parsedConsults.length;
-           break;
-
-      case ParseType.PSYCH_MD_ORDERS:
-           const parsedOrders = parsePsychMdOrders(rawText, Object.values(currentMonthData));
-           parsedOrders.forEach(order => {
-               ensureResident(order.mrn);
-               if (!currentMonthData[order.mrn].psychMdOrders.some(o => o.date === order.event.date && o.orderText === order.event.orderText)) {
-                 currentMonthData[order.mrn].psychMdOrders.push(order.event);
-                 currentMonthData[order.mrn].logs.push(createAuditEntry(`Psych MD order added: ${order.event.date}`, 'update'));
-               }
-           });
-           count = parsedOrders.length;
-           break;
-
-      case ParseType.EPISODIC_BEHAVIORS:
-           const parsedEpisodes = parseEpisodicBehaviors(rawText);
-           parsedEpisodes.forEach(({ mrn, event }) => {
-             ensureResident(mrn);
-             if (!currentMonthData[mrn].episodicBehaviors.some(b => b.date === event.date && b.snippet === event.snippet)) {
-               currentMonthData[mrn].episodicBehaviors.push(event);
-               currentMonthData[mrn].logs.push(createAuditEntry(`Episodic behavior added: ${event.date}`, 'update'));
-             }
-           });
-           count = parsedEpisodes.length;
-           break;
-      
+        applyParsedResults(type, parseConsults(rawText), targetMonth, warnings);
+        break;
+      case ParseType.BEHAVIORS:
+        applyParsedResults(type, parseBehaviors(rawText), targetMonth, warnings);
+        break;
+      case ParseType.CAREPLAN:
+        applyParsedResults(type, parseCarePlans(rawText), targetMonth, warnings);
+        break;
       case ParseType.GDR:
-           const parsedGdr = parseGdr(rawText);
-           parsedGdr.forEach(g => {
-               ensureResident(g.mrn);
-               if(!currentMonthData[g.mrn].gdr.some(e => e.date === g.event.date)) {
-                   currentMonthData[g.mrn].gdr.push(g.event);
-                   currentMonthData[g.mrn].logs.push(createAuditEntry(`GDR event added: ${g.event.date}`, 'update'));
-               }
-           });
-           count = parsedGdr.length;
-           break;
+        applyParsedResults(type, parseGdr(rawText), targetMonth, warnings);
+        break;
+      case ParseType.PSYCH_MD_ORDERS:
+        applyParsedResults(type, parsePsychMdOrders(rawText, Object.values(reviews[targetMonth] || {})), targetMonth, warnings);
+        break;
+      case ParseType.EPISODIC_BEHAVIORS:
+        applyParsedResults(type, parseEpisodicBehaviors(rawText), targetMonth, warnings);
+        break;
     }
-
-    recalculateCompliance(currentMonthData, targetMonth, settings);
-
-    setReviews(prev => ({ ...prev, [targetMonth]: currentMonthData }));
-    setSelectedMonth(targetMonth);
-    addGlobalLog(`Parsed ${type} for ${targetMonth} - processed ${count} items.`);
-  }, [reviews, settings, recalculateCompliance]);
+    setDateParseWarningHandler(null);
+  }, [applyParsedResults, reviews, settings.customMedicationMap, addGlobalLog]);
 
   const currentResidents = useMemo(() => Object.values(reviews[selectedMonth] || {}), [reviews, selectedMonth]);
 
@@ -597,6 +692,15 @@ function App() {
   const filteredNonCompliantResidents = useMemo(() => {
     return filteredResidents.filter(r => r.compliance.status === ComplianceStatus.WARNING || r.compliance.status === ComplianceStatus.CRITICAL);
   }, [filteredResidents]);
+
+  const filteredAuditLog = useMemo(() => {
+    const term = auditFilterText.trim().toLowerCase();
+    return auditLog.filter(entry => {
+      const matchesType = auditFilterType === 'ALL' || entry.type === auditFilterType;
+      const matchesText = !term || entry.message.toLowerCase().includes(term);
+      return matchesType && matchesText;
+    });
+  }, [auditLog, auditFilterText, auditFilterType]);
 
   const selectedResidents = useMemo(() => {
     const selectedSet = new Set(selectedMrns);
@@ -718,6 +822,22 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
+  const handleExportAuditLog = () => {
+    if (filteredAuditLog.length === 0) return;
+    const headers = ['Timestamp', 'Type', 'Message'];
+    const rows = filteredAuditLog.map(entry => [entry.timestamp, entry.type.toUpperCase(), entry.message]);
+    const escape = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const csv = [headers, ...rows].map(row => row.map(cell => escape(String(cell ?? ''))).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `audit_log_${selectedMonth}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    addGlobalLog(`Exported ${filteredAuditLog.length} audit log entries.`);
+  };
+
   const exportResidentList = (residentsToExport: ResidentData[], label: string) => {
     if (residentsToExport.length === 0) return;
     const headers = [
@@ -753,6 +873,21 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
+  const exportResidentLabels = (residentsToExport: ResidentData[], label: string) => {
+    if (residentsToExport.length === 0) return;
+    const headers = ['Name', 'MRN', 'Unit', 'Room'];
+    const rows = residentsToExport.map(r => [r.name, r.mrn, r.unit, r.room]);
+    const escape = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const csv = [headers, ...rows].map(row => row.map(cell => escape(String(cell ?? ''))).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${label}_${selectedMonth}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleExportFiltered = () => {
     exportResidentList(filteredResidents, 'filtered_residents');
     addGlobalLog(`Exported ${filteredResidents.length} filtered residents.`);
@@ -761,6 +896,16 @@ function App() {
   const handleExportSelected = () => {
     exportResidentList(selectedResidents, 'selected_residents');
     addGlobalLog(`Exported ${selectedResidents.length} selected residents.`);
+  };
+
+  const handleExportFilteredLabels = () => {
+    exportResidentLabels(filteredResidents, 'filtered_labels');
+    addGlobalLog(`Exported ${filteredResidents.length} filtered labels.`);
+  };
+
+  const handleExportSelectedLabels = () => {
+    exportResidentLabels(selectedResidents, 'selected_labels');
+    addGlobalLog(`Exported ${selectedResidents.length} selected labels.`);
   };
 
   const handleMarkReviewComplete = () => {
@@ -788,6 +933,31 @@ function App() {
     addGlobalLog(`Marked ${selectedResidents.length} resident reviews complete.`);
   };
 
+  const handleMarkFilteredComplete = () => {
+    if (filteredResidents.length === 0) return;
+    const timestamp = new Date().toISOString();
+    setReviews(prev => {
+      const monthData = prev[selectedMonth];
+      if (!monthData) return prev;
+      const updatedMonth = { ...monthData };
+      filteredResidents.forEach(resident => {
+        const existing = updatedMonth[resident.mrn];
+        if (!existing) return;
+        updatedMonth[resident.mrn] = {
+          ...existing,
+          logs: [...existing.logs, createAuditEntry('Review marked complete (filtered batch)', 'update')],
+          compliance: {
+            ...existing.compliance,
+            reviewComplete: true,
+            reviewCompletedAt: timestamp
+          }
+        };
+      });
+      return { ...prev, [selectedMonth]: updatedMonth };
+    });
+    addGlobalLog(`Marked ${filteredResidents.length} filtered resident reviews complete.`);
+  };
+
   const toggleResidentSelection = (mrn: string) => {
     setSelectedMrns(prev => prev.includes(mrn) ? prev.filter(id => id !== mrn) : [...prev, mrn]);
   };
@@ -809,7 +979,7 @@ function App() {
       if (!monthData || !monthData[mrn]) return prev;
       const updatedMonth = { ...monthData };
       updatedMonth[mrn] = updater(updatedMonth[mrn]);
-      recalculateCompliance(updatedMonth, selectedMonth, settings);
+      recalculateCompliance(updatedMonth, selectedMonth, settings, [mrn]);
       return { ...prev, [selectedMonth]: updatedMonth };
     });
   };
@@ -945,6 +1115,72 @@ function App() {
              <Dashboard residents={filteredResidents} />
           </div>
 
+          <div className="no-print">
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-200 px-4 py-3 bg-slate-50">
+                <div className="flex items-center gap-2 font-bold text-slate-700">
+                  <FileText className="w-4 h-4 text-slate-500" />
+                  Audit Log ({filteredAuditLog.length}/{auditLog.length})
+                </div>
+                <button
+                  onClick={handleExportAuditLog}
+                  disabled={filteredAuditLog.length === 0}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Download className="w-4 h-4" /> Export log
+                </button>
+              </div>
+              <div className="p-4 flex flex-col lg:flex-row gap-3 lg:items-center">
+                <div className="flex-1 relative">
+                  <input
+                    type="text"
+                    placeholder="Filter by keyword..."
+                    className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+                    value={auditFilterText}
+                    onChange={(e) => setAuditFilterText(e.target.value)}
+                  />
+                  <Filter className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                </div>
+                <select
+                  value={auditFilterType}
+                  onChange={(e) => setAuditFilterType(e.target.value as 'ALL' | AuditEntry['type'])}
+                  className="w-full lg:w-56 px-4 py-2 rounded-lg border border-slate-300 bg-slate-50 text-sm focus:ring-2 focus:ring-primary outline-none cursor-pointer hover:bg-white transition-colors"
+                >
+                  <option value="ALL">All types</option>
+                  <option value="info">Info</option>
+                  <option value="update">Update</option>
+                  <option value="alert">Alert</option>
+                </select>
+              </div>
+              <div className="max-h-64 overflow-auto">
+                {filteredAuditLog.length === 0 ? (
+                  <div className="p-6 text-center text-sm text-slate-400">No audit entries match the current filters.</div>
+                ) : (
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead className="bg-slate-50 border-t border-b border-slate-200 text-slate-500 uppercase tracking-wide">
+                      <tr>
+                        <th className="px-4 py-2">Timestamp</th>
+                        <th className="px-4 py-2">Type</th>
+                        <th className="px-4 py-2">Message</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredAuditLog.map((entry, index) => (
+                        <tr key={`${entry.timestamp}-${index}`} className="hover:bg-slate-50">
+                          <td className="px-4 py-2 text-slate-500 whitespace-nowrap">{entry.timestamp}</td>
+                          <td className={`px-4 py-2 font-semibold ${entry.type === 'alert' ? 'text-rose-600' : entry.type === 'update' ? 'text-blue-600' : 'text-slate-600'}`}>
+                            {entry.type.toUpperCase()}
+                          </td>
+                          <td className="px-4 py-2 text-slate-700">{entry.message}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+
           <div className="flex flex-col gap-3 no-print">
             <div className="flex justify-between items-center">
               <h2 className="text-xl font-bold text-slate-700">Resident Compliance List ({filteredResidents.length})</h2>
@@ -968,6 +1204,12 @@ function App() {
                   <Download className="w-4 h-4" /> Export filtered list
                 </button>
                 <button
+                  onClick={handleExportFilteredLabels}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200"
+                >
+                  <Download className="w-4 h-4" /> Export filtered labels
+                </button>
+                <button
                   onClick={handleExportSelected}
                   disabled={selectedResidents.length === 0}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-xs font-bold hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -975,11 +1217,25 @@ function App() {
                   <Download className="w-4 h-4" /> Export selected
                 </button>
                 <button
+                  onClick={handleExportSelectedLabels}
+                  disabled={selectedResidents.length === 0}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-xs font-bold hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Download className="w-4 h-4" /> Export selected labels
+                </button>
+                <button
                   onClick={handleMarkReviewComplete}
                   disabled={selectedResidents.length === 0}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 text-green-700 text-xs font-bold hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <CheckCircle className="w-4 h-4" /> Mark review complete
+                </button>
+                <button
+                  onClick={handleMarkFilteredComplete}
+                  disabled={filteredResidents.length === 0}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <CheckCircle className="w-4 h-4" /> Mark filtered complete
                 </button>
                 <button
                   onClick={clearSelection}

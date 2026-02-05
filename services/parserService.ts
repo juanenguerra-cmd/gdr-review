@@ -3,9 +3,12 @@ import { Resident, Medication, ConsultEvent, CarePlanItem, GdrEvent, BehaviorEve
 // --- Helpers & Regex ---
 
 const REGEX_DATE_SLASH = /(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/;
-const REGEX_DATE_ISO = /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/;
+const REGEX_DATE_ISO = /(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/;
 const REGEX_DATE_TEXT = /([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(\d{2,4})/;
-const REGEX_DATE_CANDIDATE = /(\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?[,]?\s+\d{2,4})/;
+const REGEX_DATE_TEXT_DMY = /(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})[,]?\s+(\d{2,4})/;
+const REGEX_DATE_COMPACT = /\b(\d{4})(\d{2})(\d{2})\b/;
+const REGEX_DATE_DASHED_TEXT = /([A-Za-z]{3,9})[-\/](\d{1,2})[-\/](\d{2,4})/;
+const REGEX_DATE_CANDIDATE = /(\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2}|\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}|[A-Za-z]{3,9}[-\/\s]+\d{1,2}(?:st|nd|rd|th)?[,]?\s+\d{2,4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s+\d{2,4}|\d{8})/;
 const REGEX_MRN_PARENS = /\(([A-Za-z0-9]+)\)/;
 const REGEX_NAME_MRN = /^(.+?)\s*\(([A-Za-z0-9]+)\)/;
 
@@ -88,13 +91,27 @@ const normalizeYear = (value: number): number => {
   return value;
 };
 
+const isValidDate = (year: number, month: number, day: number): boolean => {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+};
+
 const formatIsoDate = (year: number, month: number, day: number): string => {
-  if (month < 1 || month > 12 || day < 1 || day > 31) return "";
+  if (!isValidDate(year, month, day)) return "";
   return `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+};
+
+let dateWarningHandler: ((value: string) => void) | null = null;
+
+export const setDateParseWarningHandler = (handler: ((value: string) => void) | null): void => {
+  dateWarningHandler = handler;
 };
 
 const warnDateParseFailure = (value: string): void => {
   if (!value) return;
+  if (dateWarningHandler) {
+    dateWarningHandler(value);
+  }
   console.warn(`Unable to parse date from "${value}".`);
 };
 
@@ -132,42 +149,64 @@ const parseDateString = (dateStr: string): string => {
     if (parsed) return parsed;
   }
 
-  const textMatch = candidate.match(REGEX_DATE_TEXT);
+  const monthMap: Record<string, number> = {
+    jan: 1,
+    january: 1,
+    feb: 2,
+    february: 2,
+    mar: 3,
+    march: 3,
+    apr: 4,
+    april: 4,
+    may: 5,
+    jun: 6,
+    june: 6,
+    jul: 7,
+    july: 7,
+    aug: 8,
+    august: 8,
+    sep: 9,
+    sept: 9,
+    september: 9,
+    oct: 10,
+    october: 10,
+    nov: 11,
+    november: 11,
+    dec: 12,
+    december: 12
+  };
+
+  const textMatch = candidate.match(REGEX_DATE_TEXT) || candidate.match(REGEX_DATE_DASHED_TEXT);
   if (textMatch) {
     const monthText = textMatch[1].toLowerCase();
     const day = parseInt(textMatch[2], 10);
     const year = normalizeYear(parseInt(textMatch[3], 10));
-    const monthMap: Record<string, number> = {
-      jan: 1,
-      january: 1,
-      feb: 2,
-      february: 2,
-      mar: 3,
-      march: 3,
-      apr: 4,
-      april: 4,
-      may: 5,
-      jun: 6,
-      june: 6,
-      jul: 7,
-      july: 7,
-      aug: 8,
-      august: 8,
-      sep: 9,
-      sept: 9,
-      september: 9,
-      oct: 10,
-      october: 10,
-      nov: 11,
-      november: 11,
-      dec: 12,
-      december: 12
-    };
     const month = monthMap[monthText];
     if (month) {
       parsed = formatIsoDate(year, month, day);
       if (parsed) return parsed;
     }
+  }
+
+  const textDmyMatch = candidate.match(REGEX_DATE_TEXT_DMY);
+  if (textDmyMatch) {
+    const day = parseInt(textDmyMatch[1], 10);
+    const monthText = textDmyMatch[2].toLowerCase();
+    const year = normalizeYear(parseInt(textDmyMatch[3], 10));
+    const month = monthMap[monthText];
+    if (month) {
+      parsed = formatIsoDate(year, month, day);
+      if (parsed) return parsed;
+    }
+  }
+
+  const compactMatch = candidate.match(REGEX_DATE_COMPACT);
+  if (compactMatch) {
+    const year = normalizeYear(parseInt(compactMatch[1], 10));
+    const month = parseInt(compactMatch[2], 10);
+    const day = parseInt(compactMatch[3], 10);
+    parsed = formatIsoDate(year, month, day);
+    if (parsed) return parsed;
   }
 
   warnDateParseFailure(candidate);
