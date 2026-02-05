@@ -16,12 +16,6 @@ export enum ParseType {
   EPISODIC_BEHAVIORS = 'episodic_behaviors'
 }
 
-export interface AuditEntry {
-  timestamp: string;
-  message: string;
-  type: 'info' | 'update' | 'alert';
-}
-
 export interface ReviewHistoryItem {
   month: string;
   status: ComplianceStatus;
@@ -155,7 +149,6 @@ export interface ResidentData extends Resident {
   psychMdOrders: PsychMdOrder[];
   episodicBehaviors: EpisodicBehaviorEvent[];
   manualGdr: ManualGdrData;
-  logs: AuditEntry[];
   compliance: {
     status: ComplianceStatus;
     issues: string[];
@@ -179,7 +172,6 @@ export interface AppState {
   reviews: Record<string, Record<string, ResidentData>>; // month -> mrn -> data
   selectedMonth: string;
   lastRefreshed: Date | null;
-  auditLog: string[];
   filters: {
     unit: string;
     search: string;
