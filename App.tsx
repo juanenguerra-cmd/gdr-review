@@ -66,6 +66,33 @@ const parseIndicationMap = (raw: string, fallback: AppSettings): AppSettings['in
   return map;
 };
 
+const validateIndicationMap = (raw: string): { line: number; message: string }[] => {
+  const validClasses = new Set(Object.keys(DEFAULT_SETTINGS.indicationMap));
+  const errors: { line: number; message: string }[] = [];
+  raw.split(/\r?\n/).forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const [cls, rest] = trimmed.split(':');
+    if (!cls || rest === undefined) {
+      errors.push({ line: index + 1, message: 'Missing ":" delimiter between class and indications.' });
+      return;
+    }
+    const className = cls.trim();
+    if (!className) {
+      errors.push({ line: index + 1, message: 'Medication class is empty.' });
+      return;
+    }
+    if (!validClasses.has(className)) {
+      errors.push({ line: index + 1, message: `Unknown medication class "${className}".` });
+    }
+    const values = rest.split(',').map(value => value.trim()).filter(Boolean);
+    if (values.length === 0) {
+      errors.push({ line: index + 1, message: 'Provide at least one indication after the colon.' });
+    }
+  });
+  return errors;
+};
+
 const formatCustomMedMap = (settings: AppSettings): string => {
   return Object.entries(settings.customMedicationMap)
     .map(([drug, cls]) => `${drug} = ${cls}`)
@@ -82,6 +109,31 @@ const parseCustomMedMap = (raw: string, fallback: AppSettings): AppSettings['cus
     map[drug.trim().toLowerCase()] = cls.trim() as AppSettings['customMedicationMap'][string];
   });
   return map;
+};
+
+const validateCustomMedMap = (raw: string): { line: number; message: string }[] => {
+  const validClasses = new Set(Object.keys(DEFAULT_SETTINGS.indicationMap));
+  const errors: { line: number; message: string }[] = [];
+  raw.split(/\r?\n/).forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const [drug, cls] = trimmed.split('=');
+    if (!drug || !cls) {
+      errors.push({ line: index + 1, message: 'Missing "=" delimiter between drug name and class.' });
+      return;
+    }
+    const drugName = drug.trim();
+    const className = cls.trim();
+    if (!drugName) {
+      errors.push({ line: index + 1, message: 'Drug name is empty.' });
+    }
+    if (!className) {
+      errors.push({ line: index + 1, message: 'Medication class is empty.' });
+    } else if (!validClasses.has(className)) {
+      errors.push({ line: index + 1, message: `Unknown medication class "${className}".` });
+    }
+  });
+  return errors;
 };
 
 const normalizeMedicationClass = (value?: string): string => {
@@ -107,6 +159,8 @@ function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [indicationMapText, setIndicationMapText] = useState(() => formatIndicationMap(DEFAULT_SETTINGS));
   const [customMedMapText, setCustomMedMapText] = useState(() => formatCustomMedMap(DEFAULT_SETTINGS));
+  const indicationMapErrors = useMemo(() => validateIndicationMap(indicationMapText), [indicationMapText]);
+  const customMedMapErrors = useMemo(() => validateCustomMedMap(customMedMapText), [customMedMapText]);
 
 
   const [, setAuditLog] = useState<string[]>([]);
@@ -498,6 +552,8 @@ function App() {
           settings={settings}
           indicationMapText={indicationMapText}
           customMedMapText={customMedMapText}
+          indicationMapErrors={indicationMapErrors}
+          customMedMapErrors={customMedMapErrors}
           onSettingsChange={handleSettingsChange}
           onIndicationMapTextChange={setIndicationMapText}
           onCustomMedMapTextChange={setCustomMedMapText}
