@@ -1,5 +1,6 @@
 import { ResidentData, ComplianceStatus, Medication, AppSettings, MedicationClass } from '../types';
 import { normalizeSettings } from './settingsService';
+import { normalizeText, resolveIndicationMatch } from './clinicalIndicationService';
 
 const isWithinDays = (dateStr: string, now: Date, days: number): boolean => {
   const date = new Date(dateStr);
@@ -7,66 +8,7 @@ const isWithinDays = (dateStr: string, now: Date, days: number): boolean => {
   return now.getTime() - date.getTime() <= days * 24 * 60 * 60 * 1000;
 };
 
-const normalizeText = (text: string): string => (text || "").trim().toLowerCase();
-const STOP_WORDS = new Set([
-  'a',
-  'an',
-  'and',
-  'for',
-  'of',
-  'or',
-  'the',
-  'to',
-  'with',
-  'per',
-  'some',
-  'agent',
-  'agents',
-  'short',
-  'term',
-  'related',
-  'dependent',
-  'other',
-  'cns',
-  'condition',
-  'conditions',
-  'disorder',
-  'disorders'
-]);
-
-const tokenize = (text: string): string[] => {
-  return normalizeText(text)
-    .split(/[^a-z0-9]+/i)
-    .map(token => token.trim())
-    .filter(token => token.length > 1 && !STOP_WORDS.has(token));
-};
-
-const hasFuzzyTokenMatch = (indication: string, allowedEntry: string): boolean => {
-  const indicationTokens = tokenize(indication);
-  const allowedTokens = tokenize(allowedEntry);
-  if (indicationTokens.length === 0 || allowedTokens.length === 0) return false;
-
-  const overlap = allowedTokens.filter(token => indicationTokens.includes(token)).length;
-  const minTokenCount = Math.min(indicationTokens.length, allowedTokens.length);
-  if (minTokenCount === 1) return overlap === 1;
-  return overlap / minTokenCount >= 0.6;
-};
-
 const getEffectiveClass = (med: Medication): MedicationClass => med.classOverride || med.class;
-
-const mapIndicationMatch = (indication: string, allowed: string[]): boolean => {
-  const normalized = normalizeText(indication);
-  if (!normalized || allowed.length === 0) return false;
-  return allowed.some(entry => {
-    const normalizedEntry = normalizeText(entry);
-    if (!normalizedEntry) return false;
-    return (
-      normalizedEntry.includes(normalized) ||
-      normalized.includes(normalizedEntry) ||
-      hasFuzzyTokenMatch(normalized, normalizedEntry)
-    );
-  });
-};
 
 const needsReview = (indication: string): boolean => /unknown|review|uncertain|tbd/i.test(indication);
 
@@ -91,6 +33,7 @@ export const evaluateResidentCompliance = (
   const hasMedsParsed = resident.meds.length > 0;
   let indicationStatus: ResidentData['compliance']['indicationStatus'] = 'OK';
   let consultStatus: ResidentData['compliance']['consultStatus'] = 'MISSING';
+  let updatedMeds = resident.meds;
 
   if (hasMedsParsed) {
     const psychCarePlanPresent = resident.carePlan.some(item => item.psychRelated);
@@ -136,27 +79,44 @@ export const evaluateResidentCompliance = (
       }
     }
 
-    resident.meds.forEach(med => {
+    updatedMeds = resident.meds.map(med => {
       const indication = (med.indication || '').trim();
       const effectiveClass = getEffectiveClass(med);
+      let indicationMatch = med.indicationMatch;
       if (!indication || indication.toLowerCase() === 'unknown') {
         addIssue(`Missing indication for ${med.drug}`, 'CRITICAL');
         indicationStatus = 'MISSING';
-        return;
+        indicationMatch = undefined;
+        return { ...med, indicationMatch };
       }
 
       if (needsReview(indication)) {
         addIssue(`Indication needs review for ${med.drug}`, 'WARNING');
         if (indicationStatus === 'OK') indicationStatus = 'NEEDS_REVIEW';
-        return;
+        indicationMatch = undefined;
+        return { ...med, indicationMatch };
       }
 
       const allowed = appliedSettings.indicationMap[effectiveClass] || [];
-      if (allowed.length > 0 && !mapIndicationMatch(indication, allowed)) {
+      const match = resolveIndicationMatch(indication, effectiveClass, allowed);
+      indicationMatch = {
+        confidence: match.confidence,
+        source: match.source,
+        label: match.label,
+        entryId: match.entryId
+      };
+      const confidenceLabel = `${Math.round(match.confidence * 100)}%`;
+      if (match.matched) {
+        if (match.confidence < 0.75) {
+          addIssue(`Indication match confidence low for ${med.drug} (${confidenceLabel})`, 'WARNING');
+          if (indicationStatus === 'OK') indicationStatus = 'NEEDS_REVIEW';
+        }
+      } else if (allowed.length > 0) {
         const severity = appliedSettings.indicationMismatchSeverity;
-        addIssue(`Indication mismatch for ${med.drug} (${effectiveClass})`, severity);
+        addIssue(`Indication mismatch for ${med.drug} (${effectiveClass}, ${confidenceLabel})`, severity);
         if (indicationStatus !== 'MISSING') indicationStatus = 'MISMATCH';
       }
+      return { ...med, indicationMatch };
     });
   }
 
@@ -169,6 +129,7 @@ export const evaluateResidentCompliance = (
 
   return {
     ...resident,
+    meds: updatedMeds,
     compliance: {
       ...resident.compliance,
       status,

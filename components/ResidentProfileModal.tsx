@@ -412,6 +412,12 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
                                                     className="w-full p-1.5 border border-slate-300 rounded text-xs print:hidden"
                                                     placeholder="Indication"
                                                   />
+                                                  {med.indicationMatch && (
+                                                    <div className="text-[10px] text-slate-500 print:text-black">
+                                                      Confidence {Math.round(med.indicationMatch.confidence * 100)}%
+                                                      {med.indicationMatch.source !== 'none' && ` · ${med.indicationMatch.source.replace('-', ' ')}`}
+                                                    </div>
+                                                  )}
                                                   <div className="text-xs print:block hidden">{med.indication || 'Unknown'}</div>
                                                 </div>
                                               </td>
