@@ -3,6 +3,9 @@ import { Resident, Medication, ConsultEvent, CarePlanItem, GdrEvent, BehaviorEve
 // --- Helpers & Regex ---
 
 const REGEX_DATE_SLASH = /(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/;
+const REGEX_DATE_ISO = /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/;
+const REGEX_DATE_TEXT = /([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(\d{2,4})/;
+const REGEX_DATE_CANDIDATE = /(\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?[,]?\s+\d{2,4})/;
 const REGEX_MRN_PARENS = /\(([A-Za-z0-9]+)\)/;
 const REGEX_NAME_MRN = /^(.+?)\s*\(([A-Za-z0-9]+)\)/;
 
@@ -78,29 +81,96 @@ const PSYCH_MAP: Record<string, MedicationClass> = {
   'galantamine': 'PSYCHOTHERAPEUTIC AND NEUROLOGICAL AGENTS - MISC.'
 };
 
+const normalizeYear = (value: number): number => {
+  if (value < 100) {
+    return value < 50 ? 2000 + value : 1900 + value;
+  }
+  return value;
+};
+
+const formatIsoDate = (year: number, month: number, day: number): string => {
+  if (month < 1 || month > 12 || day < 1 || day > 31) return "";
+  return `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+};
+
+const warnDateParseFailure = (value: string): void => {
+  if (!value) return;
+  console.warn(`Unable to parse date from "${value}".`);
+};
+
 const parseDateString = (dateStr: string): string => {
   if (!dateStr) return "";
   const t = dateStr.trim();
-  const match = t.match(REGEX_DATE_SLASH);
-  
-  if (match) {
-    const p1 = parseInt(match[1], 10);
-    const p2 = parseInt(match[2], 10);
-    const p3 = parseInt(match[3], 10);
+  const candidateMatch = t.match(REGEX_DATE_CANDIDATE);
+  if (!candidateMatch) return "";
 
-    // Standardizing on MM/DD/YYYY input assumption for US Healthcare
-    const mm = p1;
-    const dd = p2;
-    let yy = p3;
-    
-    if (yy < 100) {
-      yy = yy < 50 ? 2000 + yy : 1900 + yy;
+  const candidate = candidateMatch[0];
+  let parsed = "";
+
+  const isoMatch = candidate.match(REGEX_DATE_ISO);
+  if (isoMatch) {
+    const year = normalizeYear(parseInt(isoMatch[1], 10));
+    const month = parseInt(isoMatch[2], 10);
+    const day = parseInt(isoMatch[3], 10);
+    parsed = formatIsoDate(year, month, day);
+    if (parsed) return parsed;
+  }
+
+  const slashMatch = candidate.match(REGEX_DATE_SLASH);
+  if (slashMatch) {
+    const p1 = parseInt(slashMatch[1], 10);
+    const p2 = parseInt(slashMatch[2], 10);
+    const year = normalizeYear(parseInt(slashMatch[3], 10));
+    let month = p1;
+    let day = p2;
+
+    if (month > 12 && day <= 12) {
+      [day, month] = [month, day];
     }
 
-    if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return "";
-
-    return `${yy}-${mm.toString().padStart(2, '0')}-${dd.toString().padStart(2, '0')}`;
+    parsed = formatIsoDate(year, month, day);
+    if (parsed) return parsed;
   }
+
+  const textMatch = candidate.match(REGEX_DATE_TEXT);
+  if (textMatch) {
+    const monthText = textMatch[1].toLowerCase();
+    const day = parseInt(textMatch[2], 10);
+    const year = normalizeYear(parseInt(textMatch[3], 10));
+    const monthMap: Record<string, number> = {
+      jan: 1,
+      january: 1,
+      feb: 2,
+      february: 2,
+      mar: 3,
+      march: 3,
+      apr: 4,
+      april: 4,
+      may: 5,
+      jun: 6,
+      june: 6,
+      jul: 7,
+      july: 7,
+      aug: 8,
+      august: 8,
+      sep: 9,
+      sept: 9,
+      september: 9,
+      oct: 10,
+      october: 10,
+      nov: 11,
+      november: 11,
+      dec: 12,
+      december: 12
+    };
+    const month = monthMap[monthText];
+    if (month) {
+      parsed = formatIsoDate(year, month, day);
+      if (parsed) return parsed;
+    }
+  }
+
+  warnDateParseFailure(candidate);
   return "";
 };
 
@@ -148,16 +218,84 @@ export const parseCensus = (raw: string): Resident[] => {
   return residents;
 };
 
-const classifyMedication = (medName: string, customMap?: Record<string, MedicationClass>): MedicationClass => {
-  const nameNorm = normalizeDrugName(medName);
-  const combinedMap: Record<string, MedicationClass> = {
-    ...PSYCH_MAP,
-    ...(customMap || {})
-  };
-  if (combinedMap[nameNorm]) return combinedMap[nameNorm];
+type MedicationIndex = {
+  exact: Record<string, MedicationClass>;
+  prefixIndex: Record<string, string[]>;
+};
 
-  const entry = Object.entries(combinedMap).find(([key]) => nameNorm.includes(key));
-  if (entry) return entry[1];
+const buildMedicationIndexFromMap = (map: Record<string, MedicationClass>): MedicationIndex => {
+  const index: MedicationIndex = { exact: {}, prefixIndex: {} };
+
+  const addEntry = (key: string, value: MedicationClass) => {
+    const normalized = normalizeDrugName(key);
+    if (!normalized) return;
+    index.exact[normalized] = value;
+    const tokens = normalized.split(' ').filter(Boolean);
+    for (const token of tokens) {
+      const prefix = token.slice(0, 3);
+      if (!prefix) continue;
+      if (!index.prefixIndex[prefix]) {
+        index.prefixIndex[prefix] = [];
+      }
+      index.prefixIndex[prefix].push(normalized);
+    }
+  };
+
+  Object.entries(map).forEach(([key, value]) => addEntry(key, value));
+  return index;
+};
+
+const BASE_MEDICATION_INDEX = buildMedicationIndexFromMap(PSYCH_MAP);
+
+const buildMedicationIndex = (customMap?: Record<string, MedicationClass>): MedicationIndex => {
+  const prefixIndex: Record<string, string[]> = {};
+  Object.entries(BASE_MEDICATION_INDEX.prefixIndex).forEach(([key, value]) => {
+    prefixIndex[key] = [...value];
+  });
+
+  const index: MedicationIndex = {
+    exact: { ...BASE_MEDICATION_INDEX.exact },
+    prefixIndex
+  };
+
+  if (customMap) {
+    Object.entries(customMap).forEach(([key, value]) => {
+      const normalized = normalizeDrugName(key);
+      if (!normalized) return;
+      index.exact[normalized] = value;
+      const tokens = normalized.split(' ').filter(Boolean);
+      for (const token of tokens) {
+        const prefix = token.slice(0, 3);
+        if (!prefix) continue;
+        if (!index.prefixIndex[prefix]) {
+          index.prefixIndex[prefix] = [];
+        }
+        index.prefixIndex[prefix].push(normalized);
+      }
+    });
+  }
+
+  return index;
+};
+
+const classifyMedication = (medName: string, index: MedicationIndex): MedicationClass => {
+  const nameNorm = normalizeDrugName(medName);
+  if (index.exact[nameNorm]) return index.exact[nameNorm];
+
+  const tokens = nameNorm.split(' ').filter(Boolean);
+  const candidates = new Set<string>();
+  for (const token of tokens) {
+    const prefix = token.slice(0, 3);
+    if (!prefix) continue;
+    const matches = index.prefixIndex[prefix];
+    if (matches) {
+      matches.forEach((value) => candidates.add(value));
+    }
+  }
+
+  for (const key of candidates) {
+    if (nameNorm.includes(key)) return index.exact[key];
+  }
 
   return "Other";
 };
@@ -190,6 +328,7 @@ const extractMedicationClass = (text: string): { classOverride?: MedicationClass
 export const parseMeds = (raw: string, customMap?: Record<string, MedicationClass>): Medication[] => {
   const meds: Medication[] = [];
   const lines = raw.split(/\r?\n/);
+  const medicationIndex = buildMedicationIndex(customMap);
 
   for (const line of lines) {
     const text = normalizeText(line);
@@ -206,7 +345,7 @@ export const parseMeds = (raw: string, customMap?: Record<string, MedicationClas
     let startDate: string | undefined;
     let cleanText = rawMedText;
     
-    const dateMatch = cleanText.match(REGEX_DATE_SLASH);
+    const dateMatch = cleanText.match(REGEX_DATE_CANDIDATE);
     if (dateMatch) {
         startDate = parseDateString(dateMatch[0]);
         cleanText = cleanText.replace(dateMatch[0], "").trim();
@@ -317,7 +456,7 @@ export const parseMeds = (raw: string, customMap?: Record<string, MedicationClas
       display: drugNameAndDose, // This usually contains "Name + Strength + Form"
       nameRaw,
       nameNorm,
-      class: classifyMedication(nameRaw, customMap),
+      class: classifyMedication(nameRaw, medicationIndex),
       classOverride,
       frequency: frequency, 
       dose: drugNameAndDose, // Using the full name+strength string as dose/display for now
