@@ -596,7 +596,7 @@ export const parseGdr = (_raw: string): { mrn: string; event: GdrEvent }[] => {
     return { medication, dose };
   };
 
-  const buildEvent = (mrn: string, sourceText: string): GdrEvent | null => {
+  const buildEvent = (sourceText: string): GdrEvent | null => {
     const blockText = normalizeText(sourceText);
     if (!blockText) return null;
 
@@ -631,7 +631,7 @@ export const parseGdr = (_raw: string): { mrn: string; event: GdrEvent }[] => {
 
   const flushBuffer = () => {
     if (!currentMrn || buffer.length === 0) return;
-    const event = buildEvent(currentMrn, buffer.join(" "));
+    const event = buildEvent(buffer.join(" "));
     if (!event) {
       buffer = [];
       return;
@@ -648,7 +648,7 @@ export const parseGdr = (_raw: string): { mrn: string; event: GdrEvent }[] => {
     if (mrn) {
       const nameMrnMatch = text.match(REGEX_NAME_MRN);
       const inlineDetail = nameMrnMatch ? text.replace(nameMrnMatch[0], "").trim() : text;
-      const inlineEvent = buildEvent(mrn, inlineDetail);
+      const inlineEvent = buildEvent(inlineDetail);
       if (inlineEvent) {
         results.push({ mrn, event: inlineEvent });
         currentMrn = "";
