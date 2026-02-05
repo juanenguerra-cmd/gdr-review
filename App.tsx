@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud, CheckCircle, FileText } from 'lucide-react';
+import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud, CheckCircle } from 'lucide-react';
 import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AppSettings, ManualGdrData, StoredPayload } from './types';
 import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors, setDateParseWarningHandler } from './services/parserService';
 import { evaluateResidentCompliance } from './services/complianceService';
@@ -416,7 +416,6 @@ function App() {
     warnings: string[] = []
   ) => {
     const affectedMrns = new Set<string>();
-    let count = 0;
 
     setReviews(prev => {
       const currentMonthData = { ...(prev[targetMonth] || {}) };
@@ -448,7 +447,6 @@ function App() {
             currentMonthData[p.mrn] = { ...currentMonthData[p.mrn], ...p };
             affectedMrns.add(p.mrn);
           });
-          count = parsedCensus.length;
           break;
         }
         case ParseType.MEDS: {
@@ -471,7 +469,6 @@ function App() {
             }
             affectedMrns.add(mrn);
           });
-          count = parsedMeds.length;
           break;
         }
         case ParseType.BEHAVIORS: {
@@ -483,7 +480,6 @@ function App() {
             }
             affectedMrns.add(mrn);
           });
-          count = parsedBehaviors.length;
           break;
         }
         case ParseType.CAREPLAN: {
@@ -495,7 +491,6 @@ function App() {
             }
             affectedMrns.add(cp.mrn);
           });
-          count = parsedCP.length;
           break;
         }
         case ParseType.CONSULTS: {
@@ -507,7 +502,6 @@ function App() {
             }
             affectedMrns.add(c.mrn);
           });
-          count = parsedConsults.length;
           break;
         }
         case ParseType.PSYCH_MD_ORDERS: {
@@ -519,7 +513,6 @@ function App() {
             }
             affectedMrns.add(order.mrn);
           });
-          count = parsedOrders.length;
           break;
         }
         case ParseType.EPISODIC_BEHAVIORS: {
@@ -531,7 +524,6 @@ function App() {
             }
             affectedMrns.add(mrn);
           });
-          count = parsedEpisodes.length;
           break;
         }
         case ParseType.GDR: {
@@ -543,7 +535,6 @@ function App() {
             }
             affectedMrns.add(g.mrn);
           });
-          count = parsedGdr.length;
           break;
         }
       }
