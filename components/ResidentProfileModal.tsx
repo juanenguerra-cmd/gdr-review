@@ -223,6 +223,16 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
         return <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-slate-100 text-slate-600 border border-slate-200 print:bg-transparent print:text-black print:border-black">Neutral</span>;
     }
   };
+
+  const explainabilityEntries = resident.compliance.explainability || [];
+  const formatExplainabilityValue = (value: string | number | boolean | null | string[]) => {
+    if (Array.isArray(value)) {
+      return value.length > 0 ? value.join(', ') : '—';
+    }
+    if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+    if (value === null || value === undefined || value === '') return '—';
+    return String(value);
+  };
   
   return (
     <>
@@ -311,6 +321,50 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
                         </ul>
                     </div>
                 )}
+
+                <div className="border rounded-xl p-6 bg-slate-50 border-slate-200 print:bg-transparent print:border-black print:p-4 print:mb-4">
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <h3 className="font-bold flex items-center gap-2 text-slate-700 print:text-black">
+                      <Activity className="w-5 h-5"/> Why this status?
+                    </h3>
+                    <span className="text-xs text-slate-400 print:text-black">{explainabilityEntries.length} rules fired</span>
+                  </div>
+                  <p className="text-xs text-slate-500 mb-4 print:text-black">
+                    Detailed compliance rules and the data values used to evaluate them.
+                  </p>
+                  {explainabilityEntries.length === 0 ? (
+                    <div className="text-sm text-slate-500 print:text-black">No compliance rules fired for this resident.</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {explainabilityEntries.map((entry, idx) => (
+                        <div key={`${entry.ruleId}-${idx}`} className="bg-white border border-slate-200 rounded-lg p-4 print:border-black print:bg-transparent">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className="text-xs uppercase tracking-wide text-slate-400 print:text-black">Rule</div>
+                              <div className="font-semibold text-slate-700 print:text-black">{entry.ruleId}</div>
+                            </div>
+                            <span className={`text-xs font-bold px-2 py-1 rounded-full border ${
+                              entry.severity === 'CRITICAL'
+                                ? 'text-red-700 bg-red-50 border-red-200'
+                                : 'text-amber-700 bg-amber-50 border-amber-200'
+                            } print:text-black print:border-black print:bg-transparent`}>
+                              {entry.severity}
+                            </span>
+                          </div>
+                          <div className="text-sm text-slate-600 mt-2 print:text-black">{entry.summary}</div>
+                          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 mt-3 text-xs text-slate-500 print:text-black">
+                            {Object.entries(entry.data).map(([key, value]) => (
+                              <div key={key}>
+                                <dt className="uppercase tracking-wide text-slate-400 print:text-black">{key}</dt>
+                                <dd className="font-medium text-slate-700 print:text-black">{formatExplainabilityValue(value)}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
             </div>
             
             {/* Overview Section */}
@@ -374,6 +428,10 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
                   <div>
                     <div className="text-xs uppercase font-bold text-slate-400">Care Plan</div>
                     <div className="font-semibold text-slate-700">{resident.meds.length > 0 ? (resident.carePlan.some(item => item.psychRelated) ? 'Present' : 'Missing') : 'N/A'}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase font-bold text-slate-400">Review Status</div>
+                    <div className="font-semibold text-slate-700">{resident.reviewComplete ? 'Complete' : 'Pending'}</div>
                   </div>
                   <div className="md:col-span-2 lg:col-span-3">
                     <div className="text-xs uppercase font-bold text-slate-400">Most Recent Episodic Behavior</div>

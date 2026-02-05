@@ -43,6 +43,7 @@ export const ResidentList: React.FC<Props> = ({ residents, onSelect }) => {
               <th className="p-4 print:p-2">Location</th>
               <th className="p-4 print:p-2">Meds Parsed</th>
               <th className="p-4 print:p-2">GDR Status</th>
+              <th className="p-4 print:p-2">Review</th>
               <th className="p-4 print:p-2">Compliance Status</th>
               <th className="p-4 print:p-2">Issues</th>
               <th className="p-4 print:p-2 no-print"></th>
@@ -51,7 +52,7 @@ export const ResidentList: React.FC<Props> = ({ residents, onSelect }) => {
           <tbody className="divide-y divide-slate-100 print:divide-black">
             {residents.length === 0 ? (
               <tr>
-                <td colSpan={7} className="p-8 text-center text-slate-400 text-sm print:text-black">No residents found matching filters.</td>
+                <td colSpan={8} className="p-8 text-center text-slate-400 text-sm print:text-black">No residents found matching filters.</td>
               </tr>
             ) : (
               residents.map((r) => (
@@ -83,6 +84,17 @@ export const ResidentList: React.FC<Props> = ({ residents, onSelect }) => {
                   </td>
                   <td className="p-4 print:p-2">
                       {getGdrBadge(r)}
+                  </td>
+                  <td className="p-4 text-xs text-slate-600 print:text-black print:p-2">
+                    {r.reviewComplete ? (
+                      <span className="inline-flex items-center text-xs font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 print:border-black print:bg-transparent print:text-black">
+                        <CheckCircle className="w-3 h-3 mr-1" /> Complete
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded border border-slate-200 print:border-black print:bg-transparent print:text-black">
+                        <Clock className="w-3 h-3 mr-1" /> Pending
+                      </span>
+                    )}
                   </td>
                   <td className="p-4 print:p-2">
                     {r.meds.length > 0 ? getStatusBadge(r.compliance.status) : <span className="text-slate-400 text-xs print:text-black">N/A</span>}

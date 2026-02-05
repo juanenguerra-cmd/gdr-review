@@ -28,6 +28,13 @@ export interface ReviewHistoryItem {
   issueCount: number;
 }
 
+export interface ComplianceExplainabilityEntry {
+  ruleId: string;
+  severity: 'CRITICAL' | 'WARNING';
+  summary: string;
+  data: Record<string, string | number | boolean | null | string[]>;
+}
+
 export interface Resident {
   mrn: string;
   name:string;
@@ -137,6 +144,8 @@ export interface ResidentData extends Resident {
   episodicBehaviors: EpisodicBehaviorEvent[];
   manualGdr: ManualGdrData;
   logs: AuditEntry[];
+  reviewComplete?: boolean;
+  reviewCompletedAt?: string;
   compliance: {
     status: ComplianceStatus;
     issues: string[];
@@ -150,6 +159,7 @@ export interface ResidentData extends Resident {
     indicationStatus?: 'OK' | 'MISSING' | 'MISMATCH' | 'NEEDS_REVIEW';
     consultStatus?: 'CONSULT' | 'ORDER' | 'MISSING';
     manualGdrStatus?: ManualGdrStatus;
+    explainability?: ComplianceExplainabilityEntry[];
   };
 }
 

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud } from 'lucide-react';
+import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud, CheckCircle } from 'lucide-react';
 import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData } from './types';
 import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors } from './services/parserService';
 import { evaluateResidentCompliance } from './services/complianceService';
@@ -188,6 +188,8 @@ function App() {
       carePlan: resident.carePlan || [],
       diagnoses: resident.diagnoses || [],
       logs: resident.logs || [],
+      reviewComplete: resident.reviewComplete ?? false,
+      reviewCompletedAt: resident.reviewCompletedAt,
       psychMdOrders: resident.psychMdOrders || [],
       episodicBehaviors: resident.episodicBehaviors || [],
       manualGdr: resident.manualGdr || createDefaultManualGdr(),
@@ -203,7 +205,8 @@ function App() {
         carePlanPsychPresent: resident.compliance?.carePlanPsychPresent,
         indicationStatus: resident.compliance?.indicationStatus,
         consultStatus: resident.compliance?.consultStatus,
-        manualGdrStatus: resident.compliance?.manualGdrStatus
+        manualGdrStatus: resident.compliance?.manualGdrStatus,
+        explainability: resident.compliance?.explainability || []
       }
     };
   };
@@ -227,7 +230,9 @@ function App() {
           meds: [], consults: [], behaviors: [], gdr: [], carePlan: [], diagnoses: [],
           psychMdOrders: [], episodicBehaviors: [], manualGdr: createDefaultManualGdr(),
           logs: [createAuditEntry("Partial record created", "info")],
-          compliance: { status: ComplianceStatus.UNKNOWN, issues: [], gdrOverdue: false, missingCarePlan: false, missingConsent: false, manualGdrStatus: 'NOT_SET' }
+          reviewComplete: false,
+          reviewCompletedAt: undefined,
+          compliance: { status: ComplianceStatus.UNKNOWN, issues: [], gdrOverdue: false, missingCarePlan: false, missingConsent: false, manualGdrStatus: 'NOT_SET', explainability: [] }
         };
       }
       if (!currentMonthData[mrn].logs) currentMonthData[mrn].logs = [];
@@ -419,6 +424,69 @@ function App() {
       addGlobalLog("Data exported to JSON.");
   };
 
+  const handleExportFilteredResidents = () => {
+    if (filteredResidents.length === 0) return;
+    const header = [
+      'Name',
+      'MRN',
+      'Unit',
+      'Room',
+      'Compliance Status',
+      'Issues',
+      'Issue Count',
+      'Review Complete',
+      'Review Completed At'
+    ];
+    const escapeCsv = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const rows = filteredResidents.map(resident => {
+      const issues = resident.compliance.issues.join('; ');
+      return [
+        resident.name,
+        resident.mrn,
+        resident.unit,
+        resident.room,
+        resident.compliance.status,
+        issues,
+        String(resident.compliance.issues.length),
+        resident.reviewComplete ? 'Yes' : 'No',
+        resident.reviewCompletedAt || ''
+      ].map(value => escapeCsv(String(value)));
+    });
+    const csv = [header.map(escapeCsv).join(','), ...rows.map(row => row.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `filtered_residents_${selectedMonth}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    addGlobalLog(`Exported ${filteredResidents.length} filtered residents.`);
+  };
+
+  const handleBatchReviewComplete = () => {
+    if (filteredResidents.length === 0) return;
+    const confirmed = window.confirm(`Mark ${filteredResidents.length} residents as review complete?`);
+    if (!confirmed) return;
+    const completedAt = new Date().toISOString();
+    setReviews(prev => {
+      const monthData = { ...(prev[selectedMonth] || {}) };
+      filteredResidents.forEach(resident => {
+        const current = monthData[resident.mrn];
+        if (!current) return;
+        const logs = current.logs ? [...current.logs] : [];
+        logs.unshift(createAuditEntry("Batch review marked complete", "update"));
+        monthData[resident.mrn] = {
+          ...current,
+          reviewComplete: true,
+          reviewCompletedAt: completedAt,
+          logs
+        };
+      });
+      return { ...prev, [selectedMonth]: monthData };
+    });
+    addGlobalLog(`Marked ${filteredResidents.length} residents as review complete.`);
+  };
+
   const handleImportClick = () => fileInputRef.current?.click();
 
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -589,15 +657,31 @@ function App() {
              <Dashboard residents={filteredResidents} />
           </div>
 
-          <div className="flex justify-between items-center no-print">
+          <div className="flex flex-col lg:flex-row justify-between lg:items-center gap-3 no-print">
             <h2 className="text-xl font-bold text-slate-700">Resident Compliance List ({filteredResidents.length})</h2>
-            <button 
-              onClick={() => setShowReport(true)}
-              disabled={filteredNonCompliantResidents.length === 0}
-              className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg font-bold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <FileWarning className="w-4 h-4"/> View Deficiency Report ({filteredNonCompliantResidents.length})
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleExportFilteredResidents}
+                disabled={filteredResidents.length === 0}
+                className="flex items-center gap-2 px-3 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-bold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Download className="w-4 h-4"/> Export filtered list
+              </button>
+              <button
+                onClick={handleBatchReviewComplete}
+                disabled={filteredResidents.length === 0}
+                className="flex items-center gap-2 px-3 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg font-bold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <CheckCircle className="w-4 h-4"/> Batch mark review complete
+              </button>
+              <button 
+                onClick={() => setShowReport(true)}
+                disabled={filteredNonCompliantResidents.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg font-bold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <FileWarning className="w-4 h-4"/> View Deficiency Report ({filteredNonCompliantResidents.length})
+              </button>
+            </div>
           </div>
 
           <ResidentList residents={filteredResidents} onSelect={(r) => setSelectedMrn(r.mrn)} />

@@ -1,4 +1,4 @@
-import { ResidentData, ComplianceStatus, Medication, AppSettings, MedicationClass } from '../types';
+import { ResidentData, ComplianceStatus, Medication, AppSettings, MedicationClass, ComplianceExplainabilityEntry } from '../types';
 import { normalizeSettings } from './settingsService';
 
 const isWithinDays = (dateStr: string, now: Date, days: number): boolean => {
@@ -70,6 +70,14 @@ const mapIndicationMatch = (indication: string, allowed: string[]): boolean => {
 
 const needsReview = (indication: string): boolean => /unknown|review|uncertain|tbd/i.test(indication);
 
+const getMostRecentDate = (dates: string[]): string | null => {
+  const sorted = dates
+    .map(date => new Date(date))
+    .filter(date => !Number.isNaN(date.getTime()))
+    .sort((a, b) => b.getTime() - a.getTime());
+  return sorted.length > 0 ? sorted[0].toISOString().split('T')[0] : null;
+};
+
 export const evaluateResidentCompliance = (
   resident: ResidentData,
   referenceDate: Date = new Date(),
@@ -77,13 +85,20 @@ export const evaluateResidentCompliance = (
 ): ResidentData => {
   const appliedSettings = normalizeSettings(settings);
   const issues: string[] = [];
+  const explainability: ComplianceExplainabilityEntry[] = [];
   const now = referenceDate;
 
   let hasCritical = false;
   let hasWarning = false;
 
-  const addIssue = (message: string, severity: 'CRITICAL' | 'WARNING') => {
+  const addIssue = (
+    ruleId: string,
+    message: string,
+    severity: 'CRITICAL' | 'WARNING',
+    data: ComplianceExplainabilityEntry['data']
+  ) => {
     issues.push(message);
+    explainability.push({ ruleId, severity, summary: message, data });
     if (severity === 'CRITICAL') hasCritical = true;
     if (severity === 'WARNING') hasWarning = true;
   };
@@ -95,13 +110,27 @@ export const evaluateResidentCompliance = (
   if (hasMedsParsed) {
     const psychCarePlanPresent = resident.carePlan.some(item => item.psychRelated);
     if (!psychCarePlanPresent) {
-      addIssue("Missing psychotropic care plan", 'CRITICAL');
+      addIssue(
+        'care-plan-missing',
+        "Missing psychotropic care plan",
+        'CRITICAL',
+        { psychCarePlanPresent }
+      );
     }
 
     const behaviorWindow = appliedSettings.behaviorWindowDays;
     const recentBehaviorNotes = resident.behaviors.filter(b => isWithinDays(b.date, now, behaviorWindow));
     if (recentBehaviorNotes.length < appliedSettings.behaviorThreshold) {
-      addIssue(`Behavior monitoring below threshold (${recentBehaviorNotes.length}/${appliedSettings.behaviorThreshold} in ${behaviorWindow} days)`, 'WARNING');
+      addIssue(
+        'behavior-monitoring-threshold',
+        `Behavior monitoring below threshold (${recentBehaviorNotes.length}/${appliedSettings.behaviorThreshold} in ${behaviorWindow} days)`,
+        'WARNING',
+        {
+          recentBehaviorNotes: recentBehaviorNotes.length,
+          threshold: appliedSettings.behaviorThreshold,
+          windowDays: behaviorWindow
+        }
+      );
     }
 
     const consultWindow = appliedSettings.consultRecencyDays;
@@ -112,27 +141,69 @@ export const evaluateResidentCompliance = (
       consultStatus = 'CONSULT';
     } else if (hasRecentOrder) {
       consultStatus = 'ORDER';
-      addIssue(`Psychiatry order present but consult not completed (last ${consultWindow} days)`, 'WARNING');
+      addIssue(
+        'consult-order-without-consult',
+        `Psychiatry order present but consult not completed (last ${consultWindow} days)`,
+        'WARNING',
+        {
+          consultWindowDays: consultWindow,
+          hasRecentConsult,
+          hasRecentOrder,
+          mostRecentConsultDate: getMostRecentDate(resident.consults.map(c => c.date)),
+          mostRecentOrderDate: getMostRecentDate(resident.psychMdOrders.map(o => o.date))
+        }
+      );
     } else {
       consultStatus = 'MISSING';
-      addIssue(`No psychiatry consult or order in last ${consultWindow} days`, 'CRITICAL');
+      addIssue(
+        'consult-missing',
+        `No psychiatry consult or order in last ${consultWindow} days`,
+        'CRITICAL',
+        {
+          consultWindowDays: consultWindow,
+          hasRecentConsult,
+          hasRecentOrder,
+          mostRecentConsultDate: getMostRecentDate(resident.consults.map(c => c.date)),
+          mostRecentOrderDate: getMostRecentDate(resident.psychMdOrders.map(o => o.date))
+        }
+      );
     }
 
     const manualGdr = resident.manualGdr;
     if (manualGdr.status === 'NOT_SET') {
-      addIssue("Manual GDR status not set", 'CRITICAL');
+      addIssue(
+        'manual-gdr-not-set',
+        "Manual GDR status not set",
+        'CRITICAL',
+        { status: manualGdr.status }
+      );
     } else if (manualGdr.status === 'DONE') {
       if (!manualGdr.note || manualGdr.note.trim().length === 0) {
-        addIssue("Manual GDR marked done without note", 'CRITICAL');
+        addIssue(
+          'manual-gdr-missing-note',
+          "Manual GDR marked done without note",
+          'CRITICAL',
+          { status: manualGdr.status, notePresent: false }
+        );
       }
     } else if (manualGdr.status === 'CONTRAINDICATED') {
       const reasons = manualGdr.contraindications;
       const hasReason = reasons.symptomsReturned || reasons.additionalGdrLikelyToImpair || reasons.riskToSelfOrOthers || reasons.other;
       if (!hasReason) {
-        addIssue("Manual GDR contraindicated without documented reasons", 'CRITICAL');
+        addIssue(
+          'manual-gdr-contraindicated-missing-reason',
+          "Manual GDR contraindicated without documented reasons",
+          'CRITICAL',
+          { status: manualGdr.status, reasons }
+        );
       }
       if (reasons.other && !reasons.otherText?.trim()) {
-        addIssue("Manual GDR contraindicated: 'Other' selected without detail", 'CRITICAL');
+        addIssue(
+          'manual-gdr-contraindicated-other-missing-detail',
+          "Manual GDR contraindicated: 'Other' selected without detail",
+          'CRITICAL',
+          { status: manualGdr.status, reasons }
+        );
       }
     }
 
@@ -140,13 +211,23 @@ export const evaluateResidentCompliance = (
       const indication = (med.indication || '').trim();
       const effectiveClass = getEffectiveClass(med);
       if (!indication || indication.toLowerCase() === 'unknown') {
-        addIssue(`Missing indication for ${med.drug}`, 'CRITICAL');
+        addIssue(
+          'medication-indication-missing',
+          `Missing indication for ${med.drug}`,
+          'CRITICAL',
+          { medication: med.drug, indication: indication || null }
+        );
         indicationStatus = 'MISSING';
         return;
       }
 
       if (needsReview(indication)) {
-        addIssue(`Indication needs review for ${med.drug}`, 'WARNING');
+        addIssue(
+          'medication-indication-needs-review',
+          `Indication needs review for ${med.drug}`,
+          'WARNING',
+          { medication: med.drug, indication }
+        );
         if (indicationStatus === 'OK') indicationStatus = 'NEEDS_REVIEW';
         return;
       }
@@ -154,7 +235,18 @@ export const evaluateResidentCompliance = (
       const allowed = appliedSettings.indicationMap[effectiveClass] || [];
       if (allowed.length > 0 && !mapIndicationMatch(indication, allowed)) {
         const severity = appliedSettings.indicationMismatchSeverity;
-        addIssue(`Indication mismatch for ${med.drug} (${effectiveClass})`, severity);
+        addIssue(
+          'medication-indication-mismatch',
+          `Indication mismatch for ${med.drug} (${effectiveClass})`,
+          severity,
+          {
+            medication: med.drug,
+            indication,
+            effectiveClass,
+            allowedIndications: allowed,
+            mismatchSeverity: severity
+          }
+        );
         if (indicationStatus !== 'MISSING') indicationStatus = 'MISMATCH';
       }
     });
@@ -179,7 +271,8 @@ export const evaluateResidentCompliance = (
       carePlanPsychPresent: resident.carePlan.some(item => item.psychRelated),
       indicationStatus,
       consultStatus,
-      manualGdrStatus: resident.manualGdr.status
+      manualGdrStatus: resident.manualGdr.status,
+      explainability
     }
   };
 };
