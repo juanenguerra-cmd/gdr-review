@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud, CheckCircle } from 'lucide-react';
+import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud, CheckCircle, ClipboardList, AlertTriangle } from 'lucide-react';
 import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData } from './types';
 import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors } from './services/parserService';
 import { evaluateResidentCompliance } from './services/complianceService';
@@ -11,6 +11,7 @@ import { ResidentProfileModal } from './components/ResidentProfileModal';
 import { Dashboard } from './components/Dashboard';
 import { DeficiencyReport } from './components/DeficiencyReport';
 import { SettingsModal } from './components/SettingsModal';
+import { AuditLogPanel } from './components/AuditLogPanel';
 
 const PrintStyles = () => (
   <style>{`
@@ -169,7 +170,6 @@ const normalizeMedicationClass = (value?: string): string => {
 };
 
 function App() {
-  const appRef = useRef<HTMLDivElement>(null);
   const [reviews, setReviews] = useState<Record<string, Record<string, ResidentData>>>({});
   const [selectedMonth, setSelectedMonth] = useState<string>(new Date().toISOString().slice(0, 7));
   const [selectedMrn, setSelectedMrn] = useState<string | null>(null);
@@ -185,68 +185,19 @@ function App() {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [selectedMrns, setSelectedMrns] = useState<string[]>([]);
 
-
-  const [, setAuditLog] = useState<string[]>([]);
+  const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
   const [, setShowComplianceModal] = useState(false);
   const [filterText, setFilterText] = useState("");
   const [unitFilter, setUnitFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [psychOnly, setPsychOnly] = useState(false);
+  const [showAuditLog, setShowAuditLog] = useState(false);
+  const [parseWarnings, setParseWarnings] = useState<string[]>([]);
+  const [isParsing, setIsParsing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasHydrated = useRef(false);
-  const scaleStateRef = useRef({ scale: 1 });
-
-  useEffect(() => {
-    const element = appRef.current;
-    if (!element) return undefined;
-
-    const previousBodyOverflow = document.body.style.overflow;
-    const previousHtmlOverflow = document.documentElement.style.overflow;
-    let frameId: number | null = null;
-
-    const applyScale = () => {
-      if (frameId !== null) {
-        cancelAnimationFrame(frameId);
-      }
-      frameId = requestAnimationFrame(() => {
-        const { innerWidth, innerHeight } = window;
-        const contentWidth = element.scrollWidth;
-        const contentHeight = element.scrollHeight;
-        if (!contentWidth || !contentHeight) return;
-
-        const scale = Math.min(1, innerWidth / contentWidth, innerHeight / contentHeight);
-        const previousScaleState = scaleStateRef.current;
-        const scaleDelta = Math.abs(previousScaleState.scale - scale);
-
-        if (scaleDelta < 0.001) {
-          return;
-        }
-
-        element.style.transform = `scale(${scale})`;
-        element.style.transformOrigin = 'top left';
-        document.body.style.overflow = 'hidden';
-        document.documentElement.style.overflow = 'hidden';
-        scaleStateRef.current = { scale };
-      });
-    };
-
-    applyScale();
-    const resizeObserver = new ResizeObserver(() => applyScale());
-    resizeObserver.observe(element);
-    window.addEventListener('resize', applyScale);
-
-    return () => {
-      if (frameId !== null) {
-        cancelAnimationFrame(frameId);
-      }
-      resizeObserver.disconnect();
-      window.removeEventListener('resize', applyScale);
-      document.body.style.overflow = previousBodyOverflow;
-      document.documentElement.style.overflow = previousHtmlOverflow;
-      element.style.transform = '';
-      element.style.transformOrigin = '';
-    };
-  }, []);
+  const parserWorkerRef = useRef<Worker | null>(null);
+  const settingsRef = useRef(settings);
 
   useEffect(() => {
     const nextIndicationText = formatIndicationMap(settings);
@@ -257,16 +208,25 @@ function App() {
     setCustomMedMapErrors(validateCustomMedMap(nextCustomMedText));
   }, [settings]);
 
-  const addGlobalLog = useCallback((action: string) => {
-    const timestamp = new Date().toLocaleTimeString();
-    setAuditLog((prev: string[]) => [`[${timestamp}] ${action}`, ...prev]);
-  }, []);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
 
-  const createAuditEntry = (message: string, type: AuditEntry['type'] = 'info'): AuditEntry => ({
+  const createAuditEntry = useCallback((message: string, type: AuditEntry['type'] = 'info'): AuditEntry => ({
     timestamp: new Date().toLocaleString(),
     message,
     type
-  });
+  }), []);
+
+  const addGlobalLog = useCallback((action: string) => {
+    const entry = createAuditEntry(action, 'info');
+    setAuditLog((prev) => [entry, ...prev]);
+  }, [createAuditEntry]);
+
+  const pushAuditEntry = useCallback((message: string, type: AuditEntry['type']) => {
+    const entry = createAuditEntry(message, type);
+    setAuditLog((prev) => [entry, ...prev]);
+  }, [createAuditEntry]);
 
   const normalizeResident = (resident: ResidentData): ResidentData => {
     const normalizedMeds = (resident.meds || []).map((med) => ({
@@ -308,13 +268,184 @@ function App() {
     };
   };
 
-  const recalculateCompliance = useCallback((monthData: Record<string, ResidentData>, month: string, settingsToUse: AppSettings) => {
+  const applyParsedResults = useCallback((
+    type: ParseType,
+    result: unknown,
+    targetMonth: string,
+    warnings: string[]
+  ) => {
+    let count = 0;
+    setReviews(prev => {
+      const currentMonthData = { ...(prev[targetMonth] || {}) };
+      const updatedMrns = new Set<string>();
+
+      const ensureResident = (mrn: string) => {
+        if (!currentMonthData[mrn]) {
+          currentMonthData[mrn] = {
+            mrn, name: 'Unknown', room: '', unit: '',
+            meds: [], consults: [], behaviors: [], gdr: [], carePlan: [], diagnoses: [],
+            psychMdOrders: [], episodicBehaviors: [], manualGdr: createDefaultManualGdr(),
+            logs: [createAuditEntry("Partial record created", "info")],
+            compliance: { status: ComplianceStatus.UNKNOWN, issues: [], gdrOverdue: false, missingCarePlan: false, missingConsent: false, manualGdrStatus: 'NOT_SET', explainability: [], reviewComplete: false }
+          };
+        }
+        if (!currentMonthData[mrn].logs) currentMonthData[mrn].logs = [];
+        if (!currentMonthData[mrn].diagnoses) currentMonthData[mrn].diagnoses = [];
+        if (!currentMonthData[mrn].behaviors) currentMonthData[mrn].behaviors = [];
+        if (!currentMonthData[mrn].gdr) currentMonthData[mrn].gdr = [];
+        if (!currentMonthData[mrn].carePlan) currentMonthData[mrn].carePlan = [];
+        if (!currentMonthData[mrn].consults) currentMonthData[mrn].consults = [];
+        if (!currentMonthData[mrn].psychMdOrders) currentMonthData[mrn].psychMdOrders = [];
+        if (!currentMonthData[mrn].episodicBehaviors) currentMonthData[mrn].episodicBehaviors = [];
+        if (!currentMonthData[mrn].manualGdr) currentMonthData[mrn].manualGdr = createDefaultManualGdr();
+      };
+
+      switch (type) {
+        case ParseType.CENSUS: {
+          const parsedCensus = result as ReturnType<typeof parseCensus>;
+          parsedCensus.forEach(p => {
+            ensureResident(p.mrn);
+            currentMonthData[p.mrn] = { ...currentMonthData[p.mrn], ...p, logs: currentMonthData[p.mrn].logs };
+            updatedMrns.add(p.mrn);
+          });
+          count = parsedCensus.length;
+          break;
+        }
+        case ParseType.MEDS: {
+          const parsedMeds = result as ReturnType<typeof parseMeds>;
+          const medsByMrn = parsedMeds.reduce((acc, med) => {
+            if (!acc[med.mrn]) acc[med.mrn] = [];
+            acc[med.mrn].push(med);
+            return acc;
+          }, {} as Record<string, typeof parsedMeds>);
+
+          Object.entries(medsByMrn).forEach(([mrn, meds]) => {
+            ensureResident(mrn);
+            currentMonthData[mrn].meds = meds;
+            updatedMrns.add(mrn);
+            const firstAP = meds.filter(m => (m.classOverride || m.class) === 'ANTIPSYCHOTICS/ANTIMANIC AGENTS' && m.startDate)
+              .sort((a, b) => new Date(a.startDate!).getTime() - new Date(b.startDate!).getTime())[0];
+
+            if (firstAP && !currentMonthData[mrn].compliance.firstAntipsychoticDate) {
+              currentMonthData[mrn].compliance.firstAntipsychoticDate = firstAP.startDate;
+              currentMonthData[mrn].logs.push(createAuditEntry(`First antipsychotic date set: ${firstAP.startDate}`, 'update'));
+            }
+            currentMonthData[mrn].logs.push(createAuditEntry(`Medications updated (${meds.length} active)`, 'update'));
+          });
+          count = parsedMeds.length;
+          break;
+        }
+        case ParseType.BEHAVIORS: {
+          const parsedBehaviors = result as ReturnType<typeof parseBehaviors>;
+          parsedBehaviors.forEach(({ mrn, event }) => {
+            ensureResident(mrn);
+            if (!currentMonthData[mrn].behaviors.some(b => b.date === event.date)) {
+              currentMonthData[mrn].behaviors.push(event);
+              updatedMrns.add(mrn);
+            }
+          });
+          count = parsedBehaviors.length;
+          if (count > 0) addGlobalLog(`${count} behavior logs parsed.`);
+          break;
+        }
+        case ParseType.CAREPLAN: {
+          const parsedCP = result as ReturnType<typeof parseCarePlans>;
+          parsedCP.forEach(cp => {
+            ensureResident(cp.mrn);
+            if (!currentMonthData[cp.mrn].carePlan.some(i => i.text === cp.item.text)) {
+              currentMonthData[cp.mrn].carePlan.push(cp.item);
+              currentMonthData[cp.mrn].logs.push(createAuditEntry(`Care Plan item added`, 'update'));
+              updatedMrns.add(cp.mrn);
+            }
+          });
+          count = parsedCP.length;
+          break;
+        }
+        case ParseType.CONSULTS: {
+          const parsedConsults = result as ReturnType<typeof parseConsults>;
+          parsedConsults.forEach(c => {
+            ensureResident(c.mrn);
+            if (!currentMonthData[c.mrn].consults.some(e => e.date === c.event.date && e.snippet === c.event.snippet)) {
+              currentMonthData[c.mrn].consults.push(c.event);
+              currentMonthData[c.mrn].logs.push(createAuditEntry(`Consult added: ${c.event.date}`, 'update'));
+              updatedMrns.add(c.mrn);
+            }
+          });
+          count = parsedConsults.length;
+          break;
+        }
+        case ParseType.PSYCH_MD_ORDERS: {
+          const parsedOrders = result as ReturnType<typeof parsePsychMdOrders>;
+          parsedOrders.forEach(order => {
+            ensureResident(order.mrn);
+            if (!currentMonthData[order.mrn].psychMdOrders.some(o => o.date === order.event.date && o.orderText === order.event.orderText)) {
+              currentMonthData[order.mrn].psychMdOrders.push(order.event);
+              currentMonthData[order.mrn].logs.push(createAuditEntry(`Psych MD order added: ${order.event.date}`, 'update'));
+              updatedMrns.add(order.mrn);
+            }
+          });
+          count = parsedOrders.length;
+          break;
+        }
+        case ParseType.EPISODIC_BEHAVIORS: {
+          const parsedEpisodes = result as ReturnType<typeof parseEpisodicBehaviors>;
+          parsedEpisodes.forEach(({ mrn, event }) => {
+            ensureResident(mrn);
+            if (!currentMonthData[mrn].episodicBehaviors.some(b => b.date === event.date && b.snippet === event.snippet)) {
+              currentMonthData[mrn].episodicBehaviors.push(event);
+              currentMonthData[mrn].logs.push(createAuditEntry(`Episodic behavior added: ${event.date}`, 'update'));
+              updatedMrns.add(mrn);
+            }
+          });
+          count = parsedEpisodes.length;
+          break;
+        }
+        case ParseType.GDR: {
+          const parsedGdr = result as ReturnType<typeof parseGdr>;
+          parsedGdr.forEach(g => {
+            ensureResident(g.mrn);
+            if (!currentMonthData[g.mrn].gdr.some(e => e.date === g.event.date)) {
+              currentMonthData[g.mrn].gdr.push(g.event);
+              currentMonthData[g.mrn].logs.push(createAuditEntry(`GDR event added: ${g.event.date}`, 'update'));
+              updatedMrns.add(g.mrn);
+            }
+          });
+          count = parsedGdr.length;
+          break;
+        }
+      }
+
+      recalculateComplianceForMrns(currentMonthData, targetMonth, settingsRef.current, Array.from(updatedMrns));
+      return { ...prev, [targetMonth]: currentMonthData };
+    });
+    setParseWarnings(warnings);
+    setIsParsing(false);
+    setSelectedMonth(targetMonth);
+
+    if (warnings.length > 0) {
+      pushAuditEntry(`Date parsing warnings: ${warnings.length} value(s) could not be parsed.`, 'alert');
+    }
+    addGlobalLog(`Parsed ${type} for ${targetMonth} - processed ${count} items.`);
+  }, [addGlobalLog, createAuditEntry, pushAuditEntry, recalculateComplianceForMrns]);
+
+  const recalculateComplianceForMrns = useCallback((
+    monthData: Record<string, ResidentData>,
+    month: string,
+    settingsToUse: AppSettings,
+    mrns: string[]
+  ) => {
+    if (mrns.length === 0) return;
     const [y, m] = month.split('-').map(Number);
     const lastDay = new Date(y, m, 0);
-    Object.keys(monthData).forEach(mrn => {
+    mrns.forEach(mrn => {
+      if (!monthData[mrn]) return;
       monthData[mrn] = evaluateResidentCompliance(monthData[mrn], lastDay, settingsToUse);
     });
   }, []);
+
+  const recalculateCompliance = useCallback((monthData: Record<string, ResidentData>, month: string, settingsToUse: AppSettings) => {
+    recalculateComplianceForMrns(monthData, month, settingsToUse, Object.keys(monthData));
+  }, [recalculateComplianceForMrns]);
 
   const hydrateFromPayload = useCallback((payload: StoredPayload) => {
     const nextSettings = normalizeSettings(payload.settings || {});
@@ -333,6 +464,28 @@ function App() {
     setReviews(normalizedReviews);
     setLastSavedAt(payload.savedAt || null);
   }, [normalizeResident, recalculateCompliance]);
+
+  useEffect(() => {
+    const worker = new Worker(new URL('./services/parserWorker.ts', import.meta.url), { type: 'module' });
+    parserWorkerRef.current = worker;
+    worker.onmessage = (event: MessageEvent) => {
+      const { type, result, targetMonth, warnings } = event.data as {
+        type: ParseType;
+        result: unknown;
+        targetMonth: string;
+        warnings: string[];
+      };
+      applyParsedResults(type, result, targetMonth, warnings);
+    };
+    worker.onerror = () => {
+      setIsParsing(false);
+      pushAuditEntry('Parsing failed in the background worker.', 'alert');
+    };
+    return () => {
+      worker.terminate();
+      parserWorkerRef.current = null;
+    };
+  }, [applyParsedResults, pushAuditEntry]);
 
   useEffect(() => {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -375,143 +528,28 @@ function App() {
   }, [reviews, settings]);
 
   const handleParse = useCallback((type: ParseType, rawText: string, targetMonth: string) => {
-    const currentMonthData = { ...(reviews[targetMonth] || {}) };
-    let count = 0;
-
-    const ensureResident = (mrn: string) => {
-      if (!currentMonthData[mrn]) {
-        currentMonthData[mrn] = {
-          mrn, name: 'Unknown', room: '', unit: '',
-          meds: [], consults: [], behaviors: [], gdr: [], carePlan: [], diagnoses: [],
-          psychMdOrders: [], episodicBehaviors: [], manualGdr: createDefaultManualGdr(),
-          logs: [createAuditEntry("Partial record created", "info")],
-          compliance: { status: ComplianceStatus.UNKNOWN, issues: [], gdrOverdue: false, missingCarePlan: false, missingConsent: false, manualGdrStatus: 'NOT_SET', explainability: [], reviewComplete: false }
-        };
-      }
-      if (!currentMonthData[mrn].logs) currentMonthData[mrn].logs = [];
-      if (!currentMonthData[mrn].diagnoses) currentMonthData[mrn].diagnoses = [];
-      if (!currentMonthData[mrn].behaviors) currentMonthData[mrn].behaviors = [];
-      if (!currentMonthData[mrn].gdr) currentMonthData[mrn].gdr = [];
-      if (!currentMonthData[mrn].carePlan) currentMonthData[mrn].carePlan = [];
-      if (!currentMonthData[mrn].consults) currentMonthData[mrn].consults = [];
-      if (!currentMonthData[mrn].psychMdOrders) currentMonthData[mrn].psychMdOrders = [];
-      if (!currentMonthData[mrn].episodicBehaviors) currentMonthData[mrn].episodicBehaviors = [];
-      if (!currentMonthData[mrn].manualGdr) currentMonthData[mrn].manualGdr = createDefaultManualGdr();
-    };
-
-    switch (type) {
-      case ParseType.CENSUS:
-        const parsedCensus = parseCensus(rawText);
-        parsedCensus.forEach(p => {
-          ensureResident(p.mrn);
-          currentMonthData[p.mrn] = { ...currentMonthData[p.mrn], ...p, logs: currentMonthData[p.mrn].logs };
-        });
-        count = parsedCensus.length;
-        break;
-      
-      case ParseType.MEDS:
-        const parsedMeds = parseMeds(rawText, settings.customMedicationMap);
-        const medsByMrn = parsedMeds.reduce((acc, med) => {
-            if(!acc[med.mrn]) acc[med.mrn] = [];
-            acc[med.mrn].push(med);
-            return acc;
-        }, {} as Record<string, typeof parsedMeds>);
-
-        Object.entries(medsByMrn).forEach(([mrn, meds]) => {
-            ensureResident(mrn);
-            currentMonthData[mrn].meds = meds;
-            
-            const firstAP = meds.filter(m => (m.classOverride || m.class) === 'ANTIPSYCHOTICS/ANTIMANIC AGENTS' && m.startDate)
-                                .sort((a, b) => new Date(a.startDate!).getTime() - new Date(b.startDate!).getTime())[0];
-            
-            if (firstAP && !currentMonthData[mrn].compliance.firstAntipsychoticDate) {
-                currentMonthData[mrn].compliance.firstAntipsychoticDate = firstAP.startDate;
-                currentMonthData[mrn].logs.push(createAuditEntry(`First antipsychotic date set: ${firstAP.startDate}`, 'update'));
-            }
-            currentMonthData[mrn].logs.push(createAuditEntry(`Medications updated (${meds.length} active)`, 'update'));
-        });
-        count = parsedMeds.length;
-        break;
-
-      case ParseType.BEHAVIORS:
-        const parsedBehaviors = parseBehaviors(rawText);
-        parsedBehaviors.forEach(({mrn, event}) => {
-            ensureResident(mrn);
-             if (!currentMonthData[mrn].behaviors.some(b => b.date === event.date)) {
-                currentMonthData[mrn].behaviors.push(event);
-            }
-        });
-        count = parsedBehaviors.length;
-        if(count > 0) addGlobalLog(`${count} behavior logs parsed.`);
-        break;
-
-       case ParseType.CAREPLAN:
-           const parsedCP = parseCarePlans(rawText);
-           parsedCP.forEach(cp => {
-               ensureResident(cp.mrn);
-               if(!currentMonthData[cp.mrn].carePlan.some(i => i.text === cp.item.text)) {
-                   currentMonthData[cp.mrn].carePlan.push(cp.item);
-                   currentMonthData[cp.mrn].logs.push(createAuditEntry(`Care Plan item added`, 'update'));
-               }
-           });
-           count = parsedCP.length;
-           break;
-      
-      case ParseType.CONSULTS:
-           const parsedConsults = parseConsults(rawText);
-           parsedConsults.forEach(c => {
-               ensureResident(c.mrn);
-               if(!currentMonthData[c.mrn].consults.some(e => e.date === c.event.date && e.snippet === c.event.snippet)) {
-                   currentMonthData[c.mrn].consults.push(c.event);
-                   currentMonthData[c.mrn].logs.push(createAuditEntry(`Consult added: ${c.event.date}`, 'update'));
-               }
-           });
-           count = parsedConsults.length;
-           break;
-
-      case ParseType.PSYCH_MD_ORDERS:
-           const parsedOrders = parsePsychMdOrders(rawText, Object.values(currentMonthData));
-           parsedOrders.forEach(order => {
-               ensureResident(order.mrn);
-               if (!currentMonthData[order.mrn].psychMdOrders.some(o => o.date === order.event.date && o.orderText === order.event.orderText)) {
-                 currentMonthData[order.mrn].psychMdOrders.push(order.event);
-                 currentMonthData[order.mrn].logs.push(createAuditEntry(`Psych MD order added: ${order.event.date}`, 'update'));
-               }
-           });
-           count = parsedOrders.length;
-           break;
-
-      case ParseType.EPISODIC_BEHAVIORS:
-           const parsedEpisodes = parseEpisodicBehaviors(rawText);
-           parsedEpisodes.forEach(({ mrn, event }) => {
-             ensureResident(mrn);
-             if (!currentMonthData[mrn].episodicBehaviors.some(b => b.date === event.date && b.snippet === event.snippet)) {
-               currentMonthData[mrn].episodicBehaviors.push(event);
-               currentMonthData[mrn].logs.push(createAuditEntry(`Episodic behavior added: ${event.date}`, 'update'));
-             }
-           });
-           count = parsedEpisodes.length;
-           break;
-      
-      case ParseType.GDR:
-           const parsedGdr = parseGdr(rawText);
-           parsedGdr.forEach(g => {
-               ensureResident(g.mrn);
-               if(!currentMonthData[g.mrn].gdr.some(e => e.date === g.event.date)) {
-                   currentMonthData[g.mrn].gdr.push(g.event);
-                   currentMonthData[g.mrn].logs.push(createAuditEntry(`GDR event added: ${g.event.date}`, 'update'));
-               }
-           });
-           count = parsedGdr.length;
-           break;
+    if (!parserWorkerRef.current) {
+      pushAuditEntry('Parser worker not available. Please reload the page.', 'alert');
+      return;
     }
-
-    recalculateCompliance(currentMonthData, targetMonth, settings);
-
-    setReviews(prev => ({ ...prev, [targetMonth]: currentMonthData }));
-    setSelectedMonth(targetMonth);
-    addGlobalLog(`Parsed ${type} for ${targetMonth} - processed ${count} items.`);
-  }, [reviews, settings, recalculateCompliance]);
+    const monthData = reviews[targetMonth] || {};
+    const residents = Object.values(monthData).map(resident => ({
+      mrn: resident.mrn,
+      name: resident.name,
+      room: resident.room,
+      unit: resident.unit
+    }));
+    setIsParsing(true);
+    setParseWarnings([]);
+    parserWorkerRef.current.postMessage({
+      id: crypto.randomUUID(),
+      type,
+      rawText,
+      targetMonth,
+      residents,
+      customMedicationMap: settings.customMedicationMap
+    });
+  }, [reviews, settings.customMedicationMap, pushAuditEntry]);
 
   const currentResidents = useMemo(() => Object.values(reviews[selectedMonth] || {}), [reviews, selectedMonth]);
 
@@ -749,13 +787,13 @@ function App() {
       if (!monthData || !monthData[mrn]) return prev;
       const updatedMonth = { ...monthData };
       updatedMonth[mrn] = updater(updatedMonth[mrn]);
-      recalculateCompliance(updatedMonth, selectedMonth, settings);
+      recalculateComplianceForMrns(updatedMonth, selectedMonth, settings, [mrn]);
       return { ...prev, [selectedMonth]: updatedMonth };
     });
   };
 
   return (
-    <div ref={appRef} className="min-h-screen pb-12 print:bg-white print:pb-0">
+    <div className="min-h-screen pb-12 print:bg-white print:pb-0">
       <PrintStyles />
       <LockScreen isLocked={isLocked} onUnlock={() => setIsLocked(false)} />
       <input type="file" ref={fileInputRef} onChange={handleImportFile} accept=".json" className="hidden" />
@@ -791,6 +829,7 @@ function App() {
           }}
         />
       )}
+      {showAuditLog && <AuditLogPanel entries={auditLog} onClose={() => setShowAuditLog(false)} />}
       {showReport && <DeficiencyReport residents={filteredNonCompliantResidents} month={selectedMonth} onClose={() => setShowReport(false)} />}
       {selectedResidentData && (
           <ResidentProfileModal 
@@ -803,7 +842,7 @@ function App() {
       )}
 
       <header className="bg-gradient-to-r from-primary to-secondary text-white shadow-lg sticky top-0 z-30 no-print">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="w-full max-w-screen-2xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
              <div className="bg-white/10 p-2 rounded-lg"><Activity className="w-6 h-6 text-white" /></div>
              <div>
@@ -820,17 +859,18 @@ function App() {
             <div className="h-6 w-px bg-white/20 mx-1"></div>
             <button onClick={() => setShowSettingsModal(true)} className="p-2 hover:bg-white/20 rounded-full" title="Settings"><Settings className="w-5 h-5" /></button>
             <button onClick={() => setShowComplianceModal(true)} className="p-2 hover:bg-white/20 rounded-full" title="Regulatory Info"><HelpCircle className="w-5 h-5" /></button>
+            <button onClick={() => setShowAuditLog(true)} className="p-2 hover:bg-white/20 rounded-full" title="Audit Log"><ClipboardList className="w-5 h-5" /></button>
             <button onClick={() => setIsLocked(true)} className="p-2 hover:bg-white/20 rounded-full text-yellow-300" title="Lock Screen"><Lock className="w-5 h-5" /></button>
           </div>
         </div>
         {lastSavedAt && (
-          <div className="max-w-7xl mx-auto px-4 pb-2 flex justify-end text-[11px] text-blue-100 opacity-80">
+          <div className="w-full max-w-screen-2xl mx-auto px-6 pb-2 flex justify-end text-[11px] text-blue-100 opacity-80">
             Auto-saved {new Date(lastSavedAt).toLocaleString()}
           </div>
         )}
       </header>
 
-      <main id="main-content" className="max-w-7xl mx-auto px-4 py-8 print:p-0 print:mx-0">
+      <main id="main-content" className="w-full max-w-screen-2xl mx-auto px-6 py-8 print:p-0 print:mx-0">
         <div className="hidden print:block mb-8 border-b border-black pb-4">
             <h1 className="text-2xl font-bold text-black">Compliance Review Report</h1>
             <p className="text-sm text-gray-600">Review Month: {selectedMonth} | Generated: {new Date().toLocaleString()}</p>
@@ -875,6 +915,33 @@ function App() {
                   </div>
               </div>
           </div>
+
+          {(isParsing || parseWarnings.length > 0) && (
+            <div className="no-print flex flex-col gap-3">
+              {isParsing && (
+                <div className="flex items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+                  <span className="font-semibold">Parsing in progress</span>
+                  <span className="text-blue-600/80">Large files are processed in the background to keep the UI responsive.</span>
+                </div>
+              )}
+              {parseWarnings.length > 0 && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <div className="flex items-center gap-2 font-semibold">
+                    <AlertTriangle className="w-4 h-4" />
+                    Date parsing warnings ({parseWarnings.length})
+                  </div>
+                  <ul className="mt-2 list-disc list-inside space-y-1 text-xs text-amber-700 max-h-32 overflow-auto">
+                    {parseWarnings.slice(0, 8).map((warning, index) => (
+                      <li key={`${warning}-${index}`}>{warning}</li>
+                    ))}
+                  </ul>
+                  {parseWarnings.length > 8 && (
+                    <p className="mt-2 text-xs text-amber-700">Showing first 8 warnings. Open the audit log for details.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="no-print">
              <Dashboard residents={filteredResidents} />

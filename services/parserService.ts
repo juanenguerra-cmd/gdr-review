@@ -3,9 +3,11 @@ import { Resident, Medication, ConsultEvent, CarePlanItem, GdrEvent, BehaviorEve
 // --- Helpers & Regex ---
 
 const REGEX_DATE_SLASH = /(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/;
-const REGEX_DATE_ISO = /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/;
+const REGEX_DATE_DOT = /(\d{1,2})[.](\d{1,2})[.](\d{2,4})/;
+const REGEX_DATE_ISO = /(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?:[T\s]\d{2}:\d{2}(?::\d{2})?)?/;
 const REGEX_DATE_TEXT = /([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(\d{2,4})/;
-const REGEX_DATE_CANDIDATE = /(\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?[,]?\s+\d{2,4})/;
+const REGEX_DATE_TEXT_REVERSE = /(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})[,]?\s+(\d{2,4})/;
+const REGEX_DATE_CANDIDATE = /(\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?)?|\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?[,]?\s+\d{2,4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}[,]?\s+\d{2,4})/;
 const REGEX_MRN_PARENS = /\(([A-Za-z0-9]+)\)/;
 const REGEX_NAME_MRN = /^(.+?)\s*\(([A-Za-z0-9]+)\)/;
 
@@ -93,8 +95,18 @@ const formatIsoDate = (year: number, month: number, day: number): string => {
   return `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
 };
 
+let dateParseWarningHandler: ((value: string) => void) | null = null;
+
+export const setDateParseWarningHandler = (handler: ((value: string) => void) | null): void => {
+  dateParseWarningHandler = handler;
+};
+
 const warnDateParseFailure = (value: string): void => {
   if (!value) return;
+  if (dateParseWarningHandler) {
+    dateParseWarningHandler(value);
+    return;
+  }
   console.warn(`Unable to parse date from "${value}".`);
 };
 
@@ -116,7 +128,7 @@ const parseDateString = (dateStr: string): string => {
     if (parsed) return parsed;
   }
 
-  const slashMatch = candidate.match(REGEX_DATE_SLASH);
+  const slashMatch = candidate.match(REGEX_DATE_SLASH) || candidate.match(REGEX_DATE_DOT);
   if (slashMatch) {
     const p1 = parseInt(slashMatch[1], 10);
     const p2 = parseInt(slashMatch[2], 10);
@@ -137,6 +149,44 @@ const parseDateString = (dateStr: string): string => {
     const monthText = textMatch[1].toLowerCase();
     const day = parseInt(textMatch[2], 10);
     const year = normalizeYear(parseInt(textMatch[3], 10));
+    const monthMap: Record<string, number> = {
+      jan: 1,
+      january: 1,
+      feb: 2,
+      february: 2,
+      mar: 3,
+      march: 3,
+      apr: 4,
+      april: 4,
+      may: 5,
+      jun: 6,
+      june: 6,
+      jul: 7,
+      july: 7,
+      aug: 8,
+      august: 8,
+      sep: 9,
+      sept: 9,
+      september: 9,
+      oct: 10,
+      october: 10,
+      nov: 11,
+      november: 11,
+      dec: 12,
+      december: 12
+    };
+    const month = monthMap[monthText];
+    if (month) {
+      parsed = formatIsoDate(year, month, day);
+      if (parsed) return parsed;
+    }
+  }
+
+  const reverseTextMatch = candidate.match(REGEX_DATE_TEXT_REVERSE);
+  if (reverseTextMatch) {
+    const day = parseInt(reverseTextMatch[1], 10);
+    const monthText = reverseTextMatch[2].toLowerCase();
+    const year = normalizeYear(parseInt(reverseTextMatch[3], 10));
     const monthMap: Record<string, number> = {
       jan: 1,
       january: 1,
