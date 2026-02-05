@@ -557,8 +557,14 @@ function App() {
           onSettingsChange={handleSettingsChange}
           onIndicationMapTextChange={setIndicationMapText}
           onCustomMedMapTextChange={setCustomMedMapText}
-          onIndicationMapBlur={() => handleSettingsChange({ indicationMap: parseIndicationMap(indicationMapText, settings) })}
-          onCustomMedMapBlur={() => handleSettingsChange({ customMedicationMap: parseCustomMedMap(customMedMapText, settings) })}
+          onIndicationMapBlur={() => {
+            if (indicationMapErrors.length > 0) return;
+            handleSettingsChange({ indicationMap: parseIndicationMap(indicationMapText, settings) });
+          }}
+          onCustomMedMapBlur={() => {
+            if (customMedMapErrors.length > 0) return;
+            handleSettingsChange({ customMedicationMap: parseCustomMedMap(customMedMapText, settings) });
+          }}
         />
       )}
       {showReport && <DeficiencyReport residents={filteredNonCompliantResidents} month={selectedMonth} onClose={() => setShowReport(false)} />}

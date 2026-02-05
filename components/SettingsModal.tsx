@@ -104,6 +104,7 @@ export const SettingsModal: React.FC<Props> = ({
               {indicationMapErrors.length > 0 && (
                 <div className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-700 space-y-1">
                   <p className="font-semibold">Line checks</p>
+                  <p>Fix these lines before the mapping updates.</p>
                   <ul className="list-disc list-inside space-y-1">
                     {indicationMapErrors.map(error => (
                       <li key={`indication-${error.line}`}>Line {error.line}: {error.message}</li>
@@ -125,6 +126,7 @@ export const SettingsModal: React.FC<Props> = ({
               {customMedMapErrors.length > 0 && (
                 <div className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-700 space-y-1">
                   <p className="font-semibold">Line checks</p>
+                  <p>Fix these lines before the mapping updates.</p>
                   <ul className="list-disc list-inside space-y-1">
                     {customMedMapErrors.map(error => (
                       <li key={`custom-${error.line}`}>Line {error.line}: {error.message}</li>
