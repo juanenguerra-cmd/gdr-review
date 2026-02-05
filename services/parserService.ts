@@ -546,6 +546,17 @@ export const parseGdr = (_raw: string): { mrn: string; event: GdrEvent }[] => {
   let currentMrn = "";
   let buffer: string[] = [];
 
+  const extractMrnFromLabel = (text: string): string | null => {
+    const match = text.match(/\bmrn[:\s-]*([A-Za-z0-9]+)\b/i);
+    return match ? match[1].toUpperCase() : null;
+  };
+
+  const extractMrnFromRowStart = (text: string): string | null => {
+    const match = text.match(/^\s*([A-Za-z0-9]{5,})\b/);
+    if (!match) return null;
+    return match[1].toUpperCase();
+  };
+
   const extractLabeledDate = (text: string, label: RegExp): string => {
     const match = text.match(label);
     if (!match) return "";
@@ -585,22 +596,19 @@ export const parseGdr = (_raw: string): { mrn: string; event: GdrEvent }[] => {
     return { medication, dose };
   };
 
-  const flushBuffer = () => {
-    if (!currentMrn || buffer.length === 0) return;
-    const blockText = normalizeText(buffer.join(" "));
-    if (!blockText) return;
+  const buildEvent = (mrn: string, sourceText: string): GdrEvent | null => {
+    const blockText = normalizeText(sourceText);
+    if (!blockText) return null;
 
     const gdrDate =
-      extractLabeledDate(blockText, /(?:last\s+gdr|gdr\s+date|gdr\s+attempt|gdr\s+performed)\s*[:\-]?\s*([0-9/\-]+)/i) ||
+      extractLabeledDate(blockText, /(?:last\s+gdr|gdr\s+date|gdr\s+attempt|gdr\s+performed|gdr\s+completed)\s*[:\-]?\s*([0-9/\-]+)/i) ||
+      extractLabeledDate(blockText, /(?:next\s+gdr|gdr\s+due)\s*[:\-]?\s*([0-9/\-]+)/i) ||
       extractFirstDate(blockText);
 
-    if (!gdrDate) {
-      buffer = [];
-      return;
-    }
+    if (!gdrDate) return null;
 
     const statusDate =
-      extractLabeledDate(blockText, /(?:status\s+date|status\s+as\s+of)\s*[:\-]?\s*([0-9/\-]+)/i) ||
+      extractLabeledDate(blockText, /(?:status\s+date|status\s+as\s+of|status\s+updated)\s*[:\-]?\s*([0-9/\-]+)/i) ||
       gdrDate;
 
     const lastPsychEval = extractLabeledDate(
@@ -611,18 +619,24 @@ export const parseGdr = (_raw: string): { mrn: string; event: GdrEvent }[] => {
     const status = extractStatus(blockText);
     const { medication, dose } = extractMedicationAndDose(blockText);
 
-    results.push({
-      mrn: currentMrn,
-      event: {
-        date: gdrDate,
-        status,
-        statusDate,
-        lastPsychEval,
-        medication,
-        dose
-      }
-    });
+    return {
+      date: gdrDate,
+      status,
+      statusDate,
+      lastPsychEval,
+      medication,
+      dose
+    };
+  };
 
+  const flushBuffer = () => {
+    if (!currentMrn || buffer.length === 0) return;
+    const event = buildEvent(currentMrn, buffer.join(" "));
+    if (!event) {
+      buffer = [];
+      return;
+    }
+    results.push({ mrn: currentMrn, event });
     buffer = [];
   };
 
@@ -630,8 +644,17 @@ export const parseGdr = (_raw: string): { mrn: string; event: GdrEvent }[] => {
     const text = normalizeText(line);
     if (!text) continue;
 
-    const mrn = extractMrn(text);
+    const mrn = extractMrn(text) || extractMrnFromLabel(text) || extractMrnFromRowStart(text);
     if (mrn) {
+      const nameMrnMatch = text.match(REGEX_NAME_MRN);
+      const inlineDetail = nameMrnMatch ? text.replace(nameMrnMatch[0], "").trim() : text;
+      const inlineEvent = buildEvent(mrn, inlineDetail);
+      if (inlineEvent) {
+        results.push({ mrn, event: inlineEvent });
+        currentMrn = "";
+        buffer = [];
+        continue;
+      }
       flushBuffer();
       currentMrn = mrn;
       buffer = [text];

@@ -1,9 +1,10 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud, CheckCircle } from 'lucide-react';
-import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData } from './types';
+import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData, StoredPayload } from './types';
 import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors } from './services/parserService';
 import { evaluateResidentCompliance } from './services/complianceService';
 import { DEFAULT_SETTINGS, normalizeSettings } from './services/settingsService';
+import { loadAutosave, saveAutosave, uploadToOneDrive } from './services/storageService';
 import { LockScreen } from './components/LockScreen';
 import { ParserModal } from './components/ParserModal';
 import { ResidentList } from './components/ResidentList';
@@ -46,13 +47,6 @@ const createDefaultManualGdr = (): ManualGdrData => ({
 
 const STORAGE_KEY = 'gdr-compliance-tool:data';
 const STORAGE_VERSION = 1;
-
-type StoredPayload = {
-  version: number;
-  savedAt: string;
-  reviews: Record<string, Record<string, ResidentData>>;
-  settings: AppSettings;
-};
 
 type MapValidationError = {
   line: number;
@@ -183,6 +177,7 @@ function App() {
   const [indicationMapErrors, setIndicationMapErrors] = useState<MapValidationError[]>(() => validateIndicationMap(formatIndicationMap(DEFAULT_SETTINGS)));
   const [customMedMapErrors, setCustomMedMapErrors] = useState<MapValidationError[]>(() => validateCustomMedMap(formatCustomMedMap(DEFAULT_SETTINGS)));
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [lastCloudSavedAt, setLastCloudSavedAt] = useState<string | null>(null);
   const [selectedMrns, setSelectedMrns] = useState<string[]>([]);
 
 
@@ -194,6 +189,8 @@ function App() {
   const [psychOnly, setPsychOnly] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasHydrated = useRef(false);
+  const cloudSyncRef = useRef<number | null>(null);
+  const cloudSyncInFlight = useRef(false);
   const scaleStateRef = useRef({ scale: 1 });
 
   useEffect(() => {
@@ -335,24 +332,42 @@ function App() {
   }, [normalizeResident, recalculateCompliance]);
 
   useEffect(() => {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      hasHydrated.current = true;
-      return;
-    }
-    try {
-      const parsed = JSON.parse(raw) as StoredPayload;
-      if (!parsed || parsed.version !== STORAGE_VERSION) {
-        hasHydrated.current = true;
-        return;
+    let isMounted = true;
+    const hydrate = async () => {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as StoredPayload;
+          if (parsed && parsed.version === STORAGE_VERSION) {
+            if (isMounted) {
+              hydrateFromPayload(parsed);
+              addGlobalLog("Local auto-save loaded.");
+            }
+            return;
+          }
+        } catch {
+          // ignore malformed local storage data
+        }
       }
-      hydrateFromPayload(parsed);
-      addGlobalLog("Local auto-save loaded.");
-    } catch {
-      // ignore malformed local storage data
-    } finally {
+
+      try {
+        const indexedPayload = await loadAutosave();
+        if (indexedPayload && indexedPayload.version === STORAGE_VERSION && isMounted) {
+          hydrateFromPayload(indexedPayload);
+          addGlobalLog("IndexedDB auto-save loaded.");
+        }
+      } catch {
+        // ignore IndexedDB errors
+      }
+    };
+
+    hydrate().finally(() => {
       hasHydrated.current = true;
-    }
+    });
+
+    return () => {
+      isMounted = false;
+    };
   }, [hydrateFromPayload, addGlobalLog]);
 
   useEffect(() => {
@@ -364,15 +379,42 @@ function App() {
       settings
     };
     const timeout = window.setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      Promise.allSettled([
+        (async () => {
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+          } catch {
+            // ignore storage errors (quota, etc.)
+          }
+        })(),
+        saveAutosave(payload).catch(() => {
+          // ignore IndexedDB errors
+        })
+      ]).finally(() => {
         setLastSavedAt(payload.savedAt);
-      } catch {
-        // ignore storage errors (quota, etc.)
+      });
+
+      if (settings.oneDriveFolderUrl) {
+        if (cloudSyncRef.current) window.clearTimeout(cloudSyncRef.current);
+        cloudSyncRef.current = window.setTimeout(async () => {
+          if (cloudSyncInFlight.current) return;
+          cloudSyncInFlight.current = true;
+          try {
+            const response = await uploadToOneDrive(settings.oneDriveFolderUrl, payload);
+            if (!response.ok) {
+              throw new Error(`OneDrive upload failed (${response.status})`);
+            }
+            setLastCloudSavedAt(new Date().toISOString());
+          } catch {
+            addGlobalLog("OneDrive auto-backup failed. Check folder permissions/link.");
+          } finally {
+            cloudSyncInFlight.current = false;
+          }
+        }, 2500);
       }
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [reviews, settings]);
+  }, [reviews, settings, addGlobalLog]);
 
   const handleParse = useCallback((type: ParseType, rawText: string, targetMonth: string) => {
     const currentMonthData = { ...(reviews[targetMonth] || {}) };
@@ -637,9 +679,27 @@ function App() {
       alert("Add a OneDrive folder URL in Settings to sync backups.");
       return;
     }
-    handleExport();
-    handleOpenOneDriveFolder();
-    addGlobalLog("Backup exported for OneDrive sync.");
+    const payload: StoredPayload = {
+      version: STORAGE_VERSION,
+      savedAt: new Date().toISOString(),
+      reviews,
+      settings
+    };
+    uploadToOneDrive(settings.oneDriveFolderUrl, payload)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`OneDrive upload failed (${response.status})`);
+        }
+        setLastCloudSavedAt(payload.savedAt);
+        addGlobalLog("OneDrive backup uploaded.");
+        alert("Backup uploaded to OneDrive.");
+      })
+      .catch(() => {
+        handleExport();
+        handleOpenOneDriveFolder();
+        addGlobalLog("Backup exported for OneDrive sync.");
+        alert("OneDrive upload failed. Exported a local backup instead.");
+      });
   };
 
   const handleDownloadReport = () => {
@@ -823,9 +883,10 @@ function App() {
             <button onClick={() => setIsLocked(true)} className="p-2 hover:bg-white/20 rounded-full text-yellow-300" title="Lock Screen"><Lock className="w-5 h-5" /></button>
           </div>
         </div>
-        {lastSavedAt && (
-          <div className="max-w-7xl mx-auto px-4 pb-2 flex justify-end text-[11px] text-blue-100 opacity-80">
-            Auto-saved {new Date(lastSavedAt).toLocaleString()}
+        {(lastSavedAt || lastCloudSavedAt) && (
+          <div className="max-w-7xl mx-auto px-4 pb-2 flex flex-wrap justify-end gap-x-3 text-[11px] text-blue-100 opacity-80">
+            {lastSavedAt && <span>Auto-saved {new Date(lastSavedAt).toLocaleString()}</span>}
+            {lastCloudSavedAt && <span>OneDrive backup {new Date(lastCloudSavedAt).toLocaleString()}</span>}
           </div>
         )}
       </header>

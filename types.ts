@@ -187,3 +187,10 @@ export interface AppState {
     medClass: string;
   };
 }
+
+export interface StoredPayload {
+  version: number;
+  savedAt: string;
+  reviews: Record<string, Record<string, ResidentData>>;
+  settings: AppSettings;
+}

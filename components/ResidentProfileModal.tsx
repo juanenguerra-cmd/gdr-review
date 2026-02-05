@@ -322,11 +322,11 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
 
                 <div className="border rounded-xl p-6 bg-white border-slate-200 shadow-sm print:shadow-none print:border-black print:p-4">
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-bold flex items-center gap-2 text-slate-800 print:text-black"><FileText className="w-5 h-5 text-primary" /> Explainability (Why)</h3>
+                    <h3 className="font-bold flex items-center gap-2 text-slate-800 print:text-black"><FileText className="w-5 h-5 text-primary" /> Why flagged?</h3>
                     <span className="text-xs text-slate-500">{explainabilityEntries.length} rule{explainabilityEntries.length === 1 ? '' : 's'} fired</span>
                   </div>
                   {explainabilityEntries.length === 0 ? (
-                    <p className="text-sm text-slate-500">No compliance issues to explain.</p>
+                    <p className="text-sm text-slate-500">No rule triggers were captured for this resident.</p>
                   ) : (
                     <div className="space-y-3">
                       {explainabilityEntries.map((entry) => (
@@ -335,7 +335,8 @@ export const ResidentProfileModal: React.FC<Props> = ({ resident, history, setti
                             <div className="font-semibold text-slate-700">{entry.title}</div>
                             {getSeverityBadge(entry.severity)}
                           </div>
-                          <div className="text-sm text-slate-600 mt-1">{entry.message}</div>
+                          <div className="text-xs text-slate-400 mt-1">Rule ID: {entry.id}</div>
+                          <div className="text-sm text-slate-600 mt-2">{entry.message}</div>
                           {entry.evidence.length > 0 && (
                             <dl className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-2 text-xs text-slate-500">
                               {entry.evidence.map((item, idx) => (
