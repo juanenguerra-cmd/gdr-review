@@ -19,10 +19,11 @@ export const ResidentList: React.FC<Props> = ({ residents, onSelect, selectedMrn
   const totalPages = Math.max(1, Math.ceil(residents.length / pageSize));
   const startIndex = (currentPage - 1) * pageSize;
   const pagedResidents = residents.slice(startIndex, startIndex + pageSize);
+  const pageResetMarker = `${residents.length}-${residents[0]?.mrn ?? ''}-${residents[residents.length - 1]?.mrn ?? ''}`;
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [residents]);
+  }, [pageResetMarker]);
 
   useEffect(() => {
     if (currentPage > totalPages) {
