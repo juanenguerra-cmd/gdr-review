@@ -194,6 +194,7 @@ function App() {
   const [psychOnly, setPsychOnly] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasHydrated = useRef(false);
+  const scaleStateRef = useRef({ scale: 1, width: '', height: '' });
 
   useEffect(() => {
     const element = appRef.current;
@@ -201,19 +202,39 @@ function App() {
 
     const previousBodyOverflow = document.body.style.overflow;
     const previousHtmlOverflow = document.documentElement.style.overflow;
+    let frameId: number | null = null;
 
     const applyScale = () => {
-      const { innerWidth, innerHeight } = window;
-      const rect = element.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId);
+      }
+      frameId = requestAnimationFrame(() => {
+        const { innerWidth, innerHeight } = window;
+        const rect = element.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
 
-      const scale = Math.min(1, innerWidth / rect.width, innerHeight / rect.height);
-      element.style.transform = `scale(${scale})`;
-      element.style.transformOrigin = 'top left';
-      element.style.width = scale < 1 ? `${(1 / scale) * 100}%` : '100%';
-      element.style.height = scale < 1 ? `${(1 / scale) * 100}%` : 'auto';
-      document.body.style.overflow = 'hidden';
-      document.documentElement.style.overflow = 'hidden';
+        const scale = Math.min(1, innerWidth / rect.width, innerHeight / rect.height);
+        const nextWidth = scale < 1 ? `${(1 / scale) * 100}%` : '100%';
+        const nextHeight = scale < 1 ? `${(1 / scale) * 100}%` : 'auto';
+        const previousScaleState = scaleStateRef.current;
+        const scaleDelta = Math.abs(previousScaleState.scale - scale);
+
+        if (
+          scaleDelta < 0.001 &&
+          previousScaleState.width === nextWidth &&
+          previousScaleState.height === nextHeight
+        ) {
+          return;
+        }
+
+        element.style.transform = `scale(${scale})`;
+        element.style.transformOrigin = 'top left';
+        element.style.width = nextWidth;
+        element.style.height = nextHeight;
+        document.body.style.overflow = 'hidden';
+        document.documentElement.style.overflow = 'hidden';
+        scaleStateRef.current = { scale, width: nextWidth, height: nextHeight };
+      });
     };
 
     applyScale();
@@ -222,6 +243,9 @@ function App() {
     window.addEventListener('resize', applyScale);
 
     return () => {
+      if (frameId !== null) {
+        cancelAnimationFrame(frameId);
+      }
       resizeObserver.disconnect();
       window.removeEventListener('resize', applyScale);
       document.body.style.overflow = previousBodyOverflow;
