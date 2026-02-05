@@ -194,7 +194,7 @@ function App() {
   const [psychOnly, setPsychOnly] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasHydrated = useRef(false);
-  const scaleStateRef = useRef({ scale: 1, width: '', height: '' });
+  const scaleStateRef = useRef({ scale: 1 });
 
   useEffect(() => {
     const element = appRef.current;
@@ -210,30 +210,23 @@ function App() {
       }
       frameId = requestAnimationFrame(() => {
         const { innerWidth, innerHeight } = window;
-        const rect = element.getBoundingClientRect();
-        if (!rect.width || !rect.height) return;
+        const contentWidth = element.scrollWidth;
+        const contentHeight = element.scrollHeight;
+        if (!contentWidth || !contentHeight) return;
 
-        const scale = Math.min(1, innerWidth / rect.width, innerHeight / rect.height);
-        const nextWidth = scale < 1 ? `${(1 / scale) * 100}%` : '100%';
-        const nextHeight = scale < 1 ? `${(1 / scale) * 100}%` : 'auto';
+        const scale = Math.min(1, innerWidth / contentWidth, innerHeight / contentHeight);
         const previousScaleState = scaleStateRef.current;
         const scaleDelta = Math.abs(previousScaleState.scale - scale);
 
-        if (
-          scaleDelta < 0.001 &&
-          previousScaleState.width === nextWidth &&
-          previousScaleState.height === nextHeight
-        ) {
+        if (scaleDelta < 0.001) {
           return;
         }
 
         element.style.transform = `scale(${scale})`;
         element.style.transformOrigin = 'top left';
-        element.style.width = nextWidth;
-        element.style.height = nextHeight;
         document.body.style.overflow = 'hidden';
         document.documentElement.style.overflow = 'hidden';
-        scaleStateRef.current = { scale, width: nextWidth, height: nextHeight };
+        scaleStateRef.current = { scale };
       });
     };
 
@@ -252,8 +245,6 @@ function App() {
       document.documentElement.style.overflow = previousHtmlOverflow;
       element.style.transform = '';
       element.style.transformOrigin = '';
-      element.style.width = '';
-      element.style.height = '';
     };
   }, []);
 
