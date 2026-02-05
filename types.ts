@@ -179,7 +179,7 @@ export interface AppState {
   reviews: Record<string, Record<string, ResidentData>>; // month -> mrn -> data
   selectedMonth: string;
   lastRefreshed: Date | null;
-  auditLog: string[];
+  auditLog: AuditEntry[];
   filters: {
     unit: string;
     search: string;
