@@ -4,7 +4,7 @@ import { ParseType } from '../types';
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  onParse: (type: ParseType, text: string, targetMonth: string) => void;
+  onParse: (type: ParseType, text: string, targetMonth: string) => Promise<void>;
 }
 
 export const ParserModal: React.FC<Props> = ({ isOpen, onClose, onParse }) => {
@@ -14,8 +14,8 @@ export const ParserModal: React.FC<Props> = ({ isOpen, onClose, onParse }) => {
 
   if (!isOpen) return null;
 
-  const handleSubmit = () => {
-    onParse(type, text, targetMonth);
+  const handleSubmit = async () => {
+    await onParse(type, text, targetMonth);
     setText("");
     onClose();
   };

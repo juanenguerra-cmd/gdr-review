@@ -1,9 +1,10 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Activity, Lock, Printer, Upload, HelpCircle, Filter, X, Calendar, Download, FileJson, FileWarning, Settings, Cloud } from 'lucide-react';
-import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData } from './types';
+import { ResidentData, ParseType, ComplianceStatus, ReviewHistoryItem, AuditEntry, AppSettings, ManualGdrData, MedicationClass } from './types';
 import { parseCensus, parseMeds, parseConsults, parseCarePlans, parseGdr, parseBehaviors, parsePsychMdOrders, parseEpisodicBehaviors } from './services/parserService';
 import { evaluateResidentCompliance } from './services/complianceService';
 import { DEFAULT_SETTINGS, normalizeSettings } from './services/settingsService';
+import { ParserWorkerRequest, ParserWorkerResponse } from './services/parserWorkerTypes';
 import { LockScreen } from './components/LockScreen';
 import { ParserModal } from './components/ParserModal';
 import { ResidentList } from './components/ResidentList';
@@ -116,6 +117,11 @@ function App() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [psychOnly, setPsychOnly] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const parserWorkerRef = useRef<Worker | null>(null);
+  const parserWorkerCallbacks = useRef(
+    new Map<number, { resolve: (message: ParserWorkerResponse) => void; reject: (error: Error) => void }>()
+  );
+  const parserWorkerId = useRef(0);
 
   useEffect(() => {
     const element = appRef.current;
@@ -160,10 +166,37 @@ function App() {
     setCustomMedMapText(formatCustomMedMap(settings));
   }, [settings]);
 
-  const addGlobalLog = (action: string) => {
+  const addGlobalLog = useCallback((action: string) => {
     const timestamp = new Date().toLocaleTimeString();
     setAuditLog((prev: string[]) => [`[${timestamp}] ${action}`, ...prev]);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (typeof Worker === 'undefined') return undefined;
+    const worker = new Worker(new URL('./services/parserWorker.ts', import.meta.url), { type: 'module' });
+    parserWorkerRef.current = worker;
+
+    worker.onmessage = (event: MessageEvent<ParserWorkerResponse>) => {
+      const message = event.data;
+      const callbacks = parserWorkerCallbacks.current.get(message.id);
+      if (!callbacks) return;
+      parserWorkerCallbacks.current.delete(message.id);
+      if ('error' in message) {
+        callbacks.reject(new Error(message.error));
+      } else {
+        callbacks.resolve(message);
+      }
+    };
+
+    worker.onerror = (event) => {
+      addGlobalLog(`Parser worker error: ${event.message}`);
+    };
+
+    return () => {
+      worker.terminate();
+      parserWorkerRef.current = null;
+    };
+  }, [addGlobalLog]);
 
   const createAuditEntry = (message: string, type: AuditEntry['type'] = 'info'): AuditEntry => ({
     timestamp: new Date().toLocaleString(),
@@ -216,9 +249,83 @@ function App() {
     });
   }, []);
 
-  const handleParse = useCallback((type: ParseType, rawText: string, targetMonth: string) => {
+  const recalculateComplianceForMrns = useCallback((
+    monthData: Record<string, ResidentData>,
+    month: string,
+    settingsToUse: AppSettings,
+    mrns: Set<string>
+  ) => {
+    if (mrns.size === 0) return;
+    const [y, m] = month.split('-').map(Number);
+    const lastDay = new Date(y, m, 0);
+    mrns.forEach((mrn) => {
+      if (!monthData[mrn]) return;
+      monthData[mrn] = evaluateResidentCompliance(monthData[mrn], lastDay, settingsToUse);
+    });
+  }, []);
+
+  const parseOnMainThread = useCallback((
+    type: ParseType,
+    rawText: string,
+    residentsForOrders: ResidentData[],
+    customMedicationMap: Record<string, MedicationClass>
+  ) => {
+    switch (type) {
+      case ParseType.CENSUS:
+        return parseCensus(rawText);
+      case ParseType.MEDS:
+        return parseMeds(rawText, customMedicationMap);
+      case ParseType.CONSULTS:
+        return parseConsults(rawText);
+      case ParseType.CAREPLAN:
+        return parseCarePlans(rawText);
+      case ParseType.GDR:
+        return parseGdr(rawText);
+      case ParseType.BEHAVIORS:
+        return parseBehaviors(rawText);
+      case ParseType.PSYCH_MD_ORDERS:
+        return parsePsychMdOrders(rawText, residentsForOrders);
+      case ParseType.EPISODIC_BEHAVIORS:
+        return parseEpisodicBehaviors(rawText);
+      default:
+        return [];
+    }
+  }, []);
+
+  const parseWithWorker = useCallback(async (
+    type: ParseType,
+    rawText: string,
+    residentsForOrders: ResidentData[],
+    customMedicationMap: Record<string, MedicationClass>
+  ) => {
+    if (!parserWorkerRef.current) {
+      return parseOnMainThread(type, rawText, residentsForOrders, customMedicationMap);
+    }
+
+    const payload: ParserWorkerRequest = {
+      id: parserWorkerId.current++,
+      type,
+      rawText,
+      customMedicationMap,
+      residents: residentsForOrders.map(({ mrn, name, room, unit }) => ({ mrn, name, room, unit }))
+    };
+
+    const response = await new Promise<ParserWorkerResponse>((resolve, reject) => {
+      parserWorkerCallbacks.current.set(payload.id, { resolve, reject });
+      parserWorkerRef.current?.postMessage(payload);
+    });
+
+    if ('error' in response) {
+      throw new Error(response.error);
+    }
+
+    return response.data;
+  }, [parseOnMainThread]);
+
+  const handleParse = useCallback(async (type: ParseType, rawText: string, targetMonth: string) => {
     const currentMonthData = { ...(reviews[targetMonth] || {}) };
     let count = 0;
+    const affectedMrns = new Set<string>();
 
     const ensureResident = (mrn: string) => {
       if (!currentMonthData[mrn]) {
@@ -241,56 +348,64 @@ function App() {
       if (!currentMonthData[mrn].manualGdr) currentMonthData[mrn].manualGdr = createDefaultManualGdr();
     };
 
-    switch (type) {
-      case ParseType.CENSUS:
-        const parsedCensus = parseCensus(rawText);
-        parsedCensus.forEach(p => {
-          ensureResident(p.mrn);
-          currentMonthData[p.mrn] = { ...currentMonthData[p.mrn], ...p, logs: currentMonthData[p.mrn].logs };
-        });
-        count = parsedCensus.length;
-        break;
-      
-      case ParseType.MEDS:
-        const parsedMeds = parseMeds(rawText, settings.customMedicationMap);
-        const medsByMrn = parsedMeds.reduce((acc, med) => {
-            if(!acc[med.mrn]) acc[med.mrn] = [];
-            acc[med.mrn].push(med);
-            return acc;
-        }, {} as Record<string, typeof parsedMeds>);
+    try {
+      const parsedData = await parseWithWorker(type, rawText, Object.values(currentMonthData), settings.customMedicationMap);
 
-        Object.entries(medsByMrn).forEach(([mrn, meds]) => {
-            ensureResident(mrn);
-            currentMonthData[mrn].meds = meds;
-            
-            const firstAP = meds.filter(m => (m.classOverride || m.class) === 'ANTIPSYCHOTICS/ANTIMANIC AGENTS' && m.startDate)
-                                .sort((a, b) => new Date(a.startDate!).getTime() - new Date(b.startDate!).getTime())[0];
-            
-            if (firstAP && !currentMonthData[mrn].compliance.firstAntipsychoticDate) {
-                currentMonthData[mrn].compliance.firstAntipsychoticDate = firstAP.startDate;
-                currentMonthData[mrn].logs.push(createAuditEntry(`First antipsychotic date set: ${firstAP.startDate}`, 'update'));
-            }
-            currentMonthData[mrn].logs.push(createAuditEntry(`Medications updated (${meds.length} active)`, 'update'));
-        });
-        count = parsedMeds.length;
-        break;
+      switch (type) {
+        case ParseType.CENSUS:
+          (parsedData as ReturnType<typeof parseCensus>).forEach(p => {
+            ensureResident(p.mrn);
+            currentMonthData[p.mrn] = { ...currentMonthData[p.mrn], ...p, logs: currentMonthData[p.mrn].logs };
+            affectedMrns.add(p.mrn);
+          });
+          count = (parsedData as ReturnType<typeof parseCensus>).length;
+          break;
 
-      case ParseType.BEHAVIORS:
-        const parsedBehaviors = parseBehaviors(rawText);
-        parsedBehaviors.forEach(({mrn, event}) => {
-            ensureResident(mrn);
-             if (!currentMonthData[mrn].behaviors.some(b => b.date === event.date)) {
-                currentMonthData[mrn].behaviors.push(event);
-            }
-        });
-        count = parsedBehaviors.length;
-        if(count > 0) addGlobalLog(`${count} behavior logs parsed.`);
-        break;
+        case ParseType.MEDS: {
+          const parsedMeds = parsedData as ReturnType<typeof parseMeds>;
+          const medsByMrn = parsedMeds.reduce((acc, med) => {
+              if(!acc[med.mrn]) acc[med.mrn] = [];
+              acc[med.mrn].push(med);
+              return acc;
+          }, {} as Record<string, typeof parsedMeds>);
 
-       case ParseType.CAREPLAN:
-           const parsedCP = parseCarePlans(rawText);
+          Object.entries(medsByMrn).forEach(([mrn, meds]) => {
+              ensureResident(mrn);
+              currentMonthData[mrn].meds = meds;
+              affectedMrns.add(mrn);
+              
+              const firstAP = meds.filter(m => (m.classOverride || m.class) === 'ANTIPSYCHOTICS/ANTIMANIC AGENTS' && m.startDate)
+                                  .sort((a, b) => new Date(a.startDate!).getTime() - new Date(b.startDate!).getTime())[0];
+              
+              if (firstAP && !currentMonthData[mrn].compliance.firstAntipsychoticDate) {
+                  currentMonthData[mrn].compliance.firstAntipsychoticDate = firstAP.startDate;
+                  currentMonthData[mrn].logs.push(createAuditEntry(`First antipsychotic date set: ${firstAP.startDate}`, 'update'));
+              }
+              currentMonthData[mrn].logs.push(createAuditEntry(`Medications updated (${meds.length} active)`, 'update'));
+          });
+          count = parsedMeds.length;
+          break;
+        }
+
+        case ParseType.BEHAVIORS: {
+          const parsedBehaviors = parsedData as ReturnType<typeof parseBehaviors>;
+          parsedBehaviors.forEach(({mrn, event}) => {
+              ensureResident(mrn);
+              affectedMrns.add(mrn);
+               if (!currentMonthData[mrn].behaviors.some(b => b.date === event.date)) {
+                  currentMonthData[mrn].behaviors.push(event);
+              }
+          });
+          count = parsedBehaviors.length;
+          if(count > 0) addGlobalLog(`${count} behavior logs parsed.`);
+          break;
+        }
+
+         case ParseType.CAREPLAN: {
+           const parsedCP = parsedData as ReturnType<typeof parseCarePlans>;
            parsedCP.forEach(cp => {
                ensureResident(cp.mrn);
+               affectedMrns.add(cp.mrn);
                if(!currentMonthData[cp.mrn].carePlan.some(i => i.text === cp.item.text)) {
                    currentMonthData[cp.mrn].carePlan.push(cp.item);
                    currentMonthData[cp.mrn].logs.push(createAuditEntry(`Care Plan item added`, 'update'));
@@ -298,11 +413,13 @@ function App() {
            });
            count = parsedCP.length;
            break;
-      
-      case ParseType.CONSULTS:
-           const parsedConsults = parseConsults(rawText);
+         }
+
+        case ParseType.CONSULTS: {
+           const parsedConsults = parsedData as ReturnType<typeof parseConsults>;
            parsedConsults.forEach(c => {
                ensureResident(c.mrn);
+               affectedMrns.add(c.mrn);
                if(!currentMonthData[c.mrn].consults.some(e => e.date === c.event.date && e.snippet === c.event.snippet)) {
                    currentMonthData[c.mrn].consults.push(c.event);
                    currentMonthData[c.mrn].logs.push(createAuditEntry(`Consult added: ${c.event.date}`, 'update'));
@@ -310,11 +427,13 @@ function App() {
            });
            count = parsedConsults.length;
            break;
+        }
 
-      case ParseType.PSYCH_MD_ORDERS:
-           const parsedOrders = parsePsychMdOrders(rawText, Object.values(currentMonthData));
+        case ParseType.PSYCH_MD_ORDERS: {
+           const parsedOrders = parsedData as ReturnType<typeof parsePsychMdOrders>;
            parsedOrders.forEach(order => {
                ensureResident(order.mrn);
+               affectedMrns.add(order.mrn);
                if (!currentMonthData[order.mrn].psychMdOrders.some(o => o.date === order.event.date && o.orderText === order.event.orderText)) {
                  currentMonthData[order.mrn].psychMdOrders.push(order.event);
                  currentMonthData[order.mrn].logs.push(createAuditEntry(`Psych MD order added: ${order.event.date}`, 'update'));
@@ -322,11 +441,13 @@ function App() {
            });
            count = parsedOrders.length;
            break;
+        }
 
-      case ParseType.EPISODIC_BEHAVIORS:
-           const parsedEpisodes = parseEpisodicBehaviors(rawText);
+        case ParseType.EPISODIC_BEHAVIORS: {
+           const parsedEpisodes = parsedData as ReturnType<typeof parseEpisodicBehaviors>;
            parsedEpisodes.forEach(({ mrn, event }) => {
              ensureResident(mrn);
+             affectedMrns.add(mrn);
              if (!currentMonthData[mrn].episodicBehaviors.some(b => b.date === event.date && b.snippet === event.snippet)) {
                currentMonthData[mrn].episodicBehaviors.push(event);
                currentMonthData[mrn].logs.push(createAuditEntry(`Episodic behavior added: ${event.date}`, 'update'));
@@ -334,11 +455,13 @@ function App() {
            });
            count = parsedEpisodes.length;
            break;
-      
-      case ParseType.GDR:
-           const parsedGdr = parseGdr(rawText);
+        }
+
+        case ParseType.GDR: {
+           const parsedGdr = parsedData as ReturnType<typeof parseGdr>;
            parsedGdr.forEach(g => {
                ensureResident(g.mrn);
+               affectedMrns.add(g.mrn);
                if(!currentMonthData[g.mrn].gdr.some(e => e.date === g.event.date)) {
                    currentMonthData[g.mrn].gdr.push(g.event);
                    currentMonthData[g.mrn].logs.push(createAuditEntry(`GDR event added: ${g.event.date}`, 'update'));
@@ -346,14 +469,20 @@ function App() {
            });
            count = parsedGdr.length;
            break;
+        }
+      }
+
+      recalculateComplianceForMrns(currentMonthData, targetMonth, settings, affectedMrns);
+
+      setReviews(prev => ({ ...prev, [targetMonth]: currentMonthData }));
+      setSelectedMonth(targetMonth);
+      addGlobalLog(`Parsed ${type} for ${targetMonth} - processed ${count} items.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      addGlobalLog(`Failed to parse ${type}: ${message}`);
+      alert(`Failed to parse ${type}. Please try again.`);
     }
-
-    recalculateCompliance(currentMonthData, targetMonth, settings);
-
-    setReviews(prev => ({ ...prev, [targetMonth]: currentMonthData }));
-    setSelectedMonth(targetMonth);
-    addGlobalLog(`Parsed ${type} for ${targetMonth} - processed ${count} items.`);
-  }, [reviews, settings, recalculateCompliance]);
+  }, [reviews, settings, parseWithWorker, recalculateComplianceForMrns]);
 
   const currentResidents = useMemo(() => Object.values(reviews[selectedMonth] || {}), [reviews, selectedMonth]);
 
@@ -479,7 +608,7 @@ function App() {
       if (!monthData || !monthData[mrn]) return prev;
       const updatedMonth = { ...monthData };
       updatedMonth[mrn] = updater(updatedMonth[mrn]);
-      recalculateCompliance(updatedMonth, selectedMonth, settings);
+      recalculateComplianceForMrns(updatedMonth, selectedMonth, settings, new Set([mrn]));
       return { ...prev, [selectedMonth]: updatedMonth };
     });
   };
