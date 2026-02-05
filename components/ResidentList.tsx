@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ResidentData, ComplianceStatus } from '../types';
 import { AlertCircle, CheckCircle, Clock, ChevronRight, XCircle } from 'lucide-react';
 
@@ -14,6 +14,21 @@ interface Props {
 
 export const ResidentList: React.FC<Props> = ({ residents, onSelect, selectedMrns, onToggleSelect, onToggleAll, allSelected, someSelected }) => {
   const selectAllRef = useRef<HTMLInputElement>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(residents.length / pageSize));
+  const startIndex = (currentPage - 1) * pageSize;
+  const pagedResidents = residents.slice(startIndex, startIndex + pageSize);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [residents]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   useEffect(() => {
     if (selectAllRef.current) {
@@ -77,7 +92,7 @@ export const ResidentList: React.FC<Props> = ({ residents, onSelect, selectedMrn
                 <td colSpan={8} className="p-8 text-center text-slate-400 text-sm print:text-black">No residents found matching filters.</td>
               </tr>
             ) : (
-              residents.map((r) => (
+              pagedResidents.map((r) => (
                 <tr 
                   key={r.mrn} 
                   onClick={() => onSelect(r)}
@@ -138,6 +153,36 @@ export const ResidentList: React.FC<Props> = ({ residents, onSelect, selectedMrn
           </tbody>
         </table>
       </div>
+      {residents.length > pageSize && (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-slate-200 bg-white text-xs text-slate-500 no-print">
+          <div>
+            Showing <span className="font-semibold text-slate-700">{startIndex + 1}</span>-
+            <span className="font-semibold text-slate-700">{Math.min(startIndex + pageSize, residents.length)}</span> of{' '}
+            <span className="font-semibold text-slate-700">{residents.length}</span> residents
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              disabled={currentPage === 1}
+              className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <span className="text-slate-400 font-semibold">
+              Page <span className="text-slate-700">{currentPage}</span> of <span className="text-slate-700">{totalPages}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+              disabled={currentPage === totalPages}
+              className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
